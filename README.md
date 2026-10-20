@@ -1,10 +1,10 @@
 # Escala 5x2 · Molicenter — app web
 
-Simulador e controle da escala 5x2 da frente de caixa das 8 lojas (operadoras, fiscais e empacotadores).
+Simulador e controle da escala 5x2 de todos os setores das 8 lojas.
 App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`, no mesmo modelo do QL web.
 
 - **Login:** o mesmo do Quadro de Lotação (usuários e senhas do QL). Quem já entrou no QL neste navegador entra direto. Login de loja vê só a própria loja.
-- **Colaboradores:** vêm do quadro do Senior que o QL já guarda (`ql_web_quadro_senior`): departamento FRENTE DE CAIXA, funções OPERADOR CAIXA, FISCAL DE CAIXA e EMPACOTADOR, que não estejam demitidos. Atualizou o Excel no QL → clique em "Atualizar do QL" aqui.
+- **Colaboradores:** vêm do mesmo Banco QL.xlsx importado no QL (`ql_web_quadro_senior`), todos os departamentos, sem os demitidos. A coluna "Descrição (Escala)" é o horário atual de cada pessoa e vira a sugestão de turno. Cada departamento pode ser montado inteiro ou por função. ART 62 CLT e aprendiz/curso ficam fora da escala por padrão. Atualizou o Excel no QL → clique em "Atualizar do QL" aqui.
 - **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
 ## O que tem

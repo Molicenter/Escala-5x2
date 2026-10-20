@@ -110,11 +110,16 @@ img { max-width: 100%; }
 .cenarios button.ativo { background: var(--magenta); border-color: var(--magenta); }
 
 /* ---------- abas de setor ---------- */
-.abas { display: flex; gap: 26px; border-bottom: 1px solid var(--borda); margin-top: 18px; overflow-x: auto; }
+.abas { display: flex; gap: 22px; border-bottom: 1px solid var(--borda); margin-top: 18px; overflow-x: auto; }
 .abas button { border: 0; background: none; padding: 12px 2px; font-weight: 600; color: var(--texto-suave); border-bottom: 3px solid transparent; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .abas button.ativo { color: var(--texto); border-bottom-color: var(--magenta); }
 .bolinha { width: 9px; height: 9px; border-radius: 50%; background: var(--verde); }
 .bolinha.ruim { background: var(--vermelho-forte); }
+.funcoes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; font-size: .84rem; }
+.chip-setor { border: 1px solid var(--borda); background: var(--superficie); border-radius: 999px; padding: 5px 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; font-size: .84rem; }
+.chip-setor.ativo { background: var(--azul); border-color: var(--azul); color: #fff; }
+.chip-setor.ativo .qtd { color: #C9DCEC; }
+.salvo { color: var(--verde); font-weight: 800; font-size: .8rem; }
 .abas .qtd { font-size: .75rem; color: var(--texto-fraco); font-weight: 600; }
 
 /* ---------- cartões ---------- */

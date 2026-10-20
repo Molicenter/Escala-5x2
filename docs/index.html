@@ -15,7 +15,7 @@
   <script>
     try { var t = localStorage.getItem("escala_web_tema"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}
   </script>
-  <link rel="stylesheet" href="style.css?v=1.0.0">
+  <link rel="stylesheet" href="style.css?v=1.1.0">
 </head>
 <body>
   <!-- =================== LOGIN =================== -->
@@ -54,9 +54,9 @@
   <div id="carregando" class="carregando" hidden><div class="giro"></div></div>
   <div id="toast" class="toast" hidden></div>
 
-  <script src="config.js?v=1.0.0"></script>
-  <script src="motor.js?v=1.0.0"></script>
-  <script src="app.js?v=1.0.0"></script>
+  <script src="config.js?v=1.1.0"></script>
+  <script src="motor.js?v=1.1.0"></script>
+  <script src="app.js?v=1.1.0"></script>
   <script>
     if ("serviceWorker" in navigator && location.protocol === "https:") {
       navigator.serviceWorker.register("sw.js").catch(function () {});

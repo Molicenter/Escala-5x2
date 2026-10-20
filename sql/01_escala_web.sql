@@ -2,13 +2,15 @@
 -- Escala 5x2 · Molicenter — SQL 01
 -- Tabelas e funções do app web (GitHub Pages).
 -- Usa o MESMO login do Quadro de Lotação (ql_web_login / ql_web_sessoes)
--- e lê os colaboradores da Frente de Caixa direto do quadro do Senior
--- (ql_web_quadro_senior), que já é atualizado pela tela "Atualizar banco (Excel)" do QL.
+-- e lê os colaboradores de TODOS os departamentos direto do quadro do Senior
+-- (ql_web_quadro_senior), que já é atualizado pela tela "Atualizar banco (Excel)" do QL
+-- (o mesmo Banco QL.xlsx — a coluna "Descrição (Escala)" é o horário atual de cada pessoa).
 --
 -- Pode rodar mais de uma vez sem problema (create if not exists / create or replace).
 -- ============================================================
 
--- 1) Planos de escala: 1 linha por loja + setor (operadoras / fiscais / empacotadores)
+-- 1) Planos de escala: 1 linha por loja + setor
+--    setor = 'D:<DEPARTAMENTO>' (departamento inteiro) ou 'F:<DEPARTAMENTO>|<FUNÇÃO>' (só uma função)
 create table if not exists escala_planos (
   loja          integer     not null,
   setor         text        not null,
@@ -37,7 +39,7 @@ alter table escala_planos_historico enable row level security;
 revoke all on escala_planos, escala_planos_historico from anon, authenticated;
 
 -- ------------------------------------------------------------
--- escala_web_dados: colaboradores da Frente de Caixa da loja + planos salvos
+-- escala_web_dados: colaboradores da loja (todos os departamentos) + planos salvos
 -- ------------------------------------------------------------
 create or replace function escala_web_dados(p_token uuid, p_loja integer)
 returns json
@@ -58,11 +60,11 @@ begin
     'lojas', v_permitidas,
     'hoje', _ql_web_hoje(),
     'pessoas', (select coalesce(json_agg(json_build_object(
-                  'n', nome, 'f', funcao, 's', situacao, 'e', escala, 'ad', admissao) order by funcao, nome), '[]'::json)
+                  'n', nome, 'd', dept, 'f', funcao, 's', situacao, 'e', escala, 'ad', admissao) order by dept, funcao, nome), '[]'::json)
                 from ql_web_quadro_senior
                where loja = v_lojas[1]
-                 and dept = 'FRENTE DE CAIXA'
-                 and funcao in ('OPERADOR CAIXA', 'FISCAL DE CAIXA', 'EMPACOTADOR')
+                 and coalesce(dept, '') <> '' and dept !~* '^inativo'
+                 and coalesce(funcao, '') <> ''
                  and coalesce(situacao, '') !~* 'demit'),
     'planos', (select coalesce(json_agg(json_build_object(
                   'setor', setor, 'dados', dados, 'atualizado_em', atualizado_em, 'usuario', usuario)), '[]'::json)
@@ -87,7 +89,7 @@ begin
   s := _ql_web_sessao(p_token);
   v_lojas := _ql_web_lojas(s, coalesce(p_loja, 0)::text);
   if s.loja_fixa is null and not (v_lojas[1] between 1 and 8) then raise exception 'SEM_PERMISSAO'; end if;
-  if p_setor not in ('operadoras', 'fiscais', 'empacotadores') then raise exception 'SETOR_INVALIDO'; end if;
+  if p_setor is null or p_setor !~ '^(D|F):.+' or length(p_setor) > 150 then raise exception 'SETOR_INVALIDO'; end if;
   if p_dados is null or jsonb_typeof(p_dados) <> 'object' then raise exception 'DADOS_INVALIDOS'; end if;
   if length(p_dados::text) > 900000 then raise exception 'DADOS_GRANDES'; end if;
 

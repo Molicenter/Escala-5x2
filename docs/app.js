@@ -16,12 +16,30 @@ const normalizar = (s) => semAcento(String(s ?? "").trim().toUpperCase()).split(
 const nomeLoja = (n) => `Loja ${p2(n)}`;
 const clonar = (o) => JSON.parse(JSON.stringify(o));
 
-const SETORES = {
-  operadoras: { rotulo: "Operadoras de caixa", funcao: "OPERADOR CAIXA", curto: "Operadora", minGeral: 0.3, minDom: 0.25 },
-  fiscais: { rotulo: "Fiscais de caixa", funcao: "FISCAL DE CAIXA", curto: "Fiscal", minGeral: 0.34, minDom: 0.34 },
-  empacotadores: { rotulo: "Empacotadores", funcao: "EMPACOTADOR", curto: "Empacotador", minGeral: 0.3, minDom: 0.25 },
-};
-const ORDEM_SETORES = ["operadoras", "fiscais", "empacotadores"];
+// Setores = departamentos do quadro do Senior (Banco QL). Chave de cada plano:
+//   "D:<DEPT>"            → o departamento inteiro (todas as funções juntas)
+//   "F:<DEPT>|<FUNÇÃO>"   → só uma função (ex.: operadoras de caixa, balconistas do açougue)
+const chaveSetor = (dept, funcao) => (funcao ? `F:${dept}|${funcao}` : `D:${dept}`);
+function lerChave(k) {
+  const m = String(k || "").match(/^(D|F):([^|]+)(?:\|(.+))?$/);
+  return m ? { dept: m[2], funcao: m[1] === "F" ? m[3] : null } : null;
+}
+function infoSetor(k) {
+  const c = lerChave(k) || { dept: "?", funcao: null };
+  return {
+    ...c, chave: k,
+    rotulo: c.funcao ? `${titulo(c.dept)} · ${titulo(c.funcao)}` : `${titulo(c.dept)} · todas as funções`,
+    curto: c.funcao ? titulo(c.funcao) : titulo(c.dept),
+    filtro: (x) => x.d === c.dept && (!c.funcao || x.f === c.funcao),
+  };
+}
+// quem não entra na escala 5x2 por padrão (dá pra marcar "na escala" se quiser)
+function motivoSemEscala(x) {
+  if (/ART\.?\s*62/i.test(x.e || "")) return "ART 62 CLT";
+  if (/APRENDIZ/i.test(x.f || "") || /CURSO/i.test(x.e || "")) return "Aprendiz / curso";
+  return null;
+}
+const MIN_GERAL = 0.3, MIN_DOM = 0.25;
 const PESOS_PADRAO = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5 };
 const OPC_JORNADA = [240, 360, 380, 440, 480, 504, 528];
 const OPC_ALMOCO = [0, 15, 60, 75, 90, 120];
@@ -137,14 +155,16 @@ function sair(silencioso) {
 // ============================================================
 const est = {
   loja: +lerLocal("escala_web_loja") || 1,
-  setor: lerLocal("escala_web_setor") || "operadoras",
+  setor: lerLocal("escala_web_setor") || "",
+  hoje: null,
+  estrutura: [],          // [{ dept, n, funcoes: [{ f, n }] }]
+  ultimoPorDept: (() => { try { return JSON.parse(lerLocal("escala_web_ultimo_dept")) || {}; } catch { return {}; } })(),
   dados: null,            // resposta do escala_web_dados
   planos: {},             // setor → { p (plano), versao, usuario, sujo }
   semanaMapa: 0,
   mostrarTodosAlertas: false,
   sync: {},               // setor → { novos:[], saiu:[] }
 };
-if (!SETORES[est.setor]) est.setor = "operadoras";
 const algumSujo = () => Object.values(est.planos).some((x) => x.sujo);
 const plano = () => est.planos[est.setor]?.p;
 const ativos = (p) => p.pessoas.filter((x) => !x.fora && x.ativo !== false);
@@ -163,23 +183,15 @@ async function carregarLoja(loja) {
     est.dados = d; est.loja = d.loja; est.planos = {}; est.semanaMapa = 0;
     gravarLocal("escala_web_loja", String(d.loja));
     const hoje = M.lerISO(d.hoje) || M.lerISO(new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }));
-    for (const setor of ORDEM_SETORES) {
-      const doQL = d.pessoas.filter((x) => x.f === SETORES[setor].funcao);
-      const salvo = d.planos.find((x) => x.setor === setor);
-      let p, versao = null, usuario = null;
-      if (salvo) { p = normalizarPlano(clonar(salvo.dados), setor); versao = salvo.atualizado_em; usuario = salvo.usuario; }
-      else p = novoPlano(setor, doQL, hoje);
-      est.sync[setor] = sincronizar(p, doQL);
-      let sujo = !salvo;
-      // rascunho deste navegador (só vale se ninguém salvou por cima depois)
-      const rasc = lerRascunho(d.loja, setor);
-      if (rasc && (rasc.base || null) === (versao || null)) {
-        p = normalizarPlano(rasc.p, setor); sujo = true;
-        est.sync[setor] = sincronizar(p, doQL);
-        toast("Recuperei alterações que não tinham sido salvas.", "ok");
-      } else if (rasc) gravarRascunho(d.loja, setor, null);
-      est.planos[setor] = { p, versao, usuario, sujo };
+    est.hoje = hoje;
+    est.estrutura = montarEstrutura(d.pessoas);
+    const chaves = new Set(est.estrutura.flatMap((x) => [chaveSetor(x.dept), ...x.funcoes.map((f) => chaveSetor(x.dept, f.f))]));
+    if (!chaves.has(est.setor)) {
+      const padrao = chaveSetor("FRENTE DE CAIXA", "OPERADOR CAIXA");
+      est.setor = chaves.has(padrao) ? padrao : est.estrutura[0] ? chaveSetor(est.estrutura[0].dept) : "";
     }
+    if (!est.setor) throw new Error("Nenhum colaborador desta loja no quadro do QL. Atualize o banco (Excel) no QL primeiro.");
+    garantirPlano(est.setor);
     render();
   } catch (e) {
     toast(e.message, "erro");
@@ -190,8 +202,48 @@ async function carregarLoja(loja) {
   }
 }
 
+function montarEstrutura(pessoas) {
+  const m = new Map();
+  for (const x of pessoas) {
+    if (!m.has(x.d)) m.set(x.d, new Map());
+    const fs = m.get(x.d); fs.set(x.f, (fs.get(x.f) || 0) + 1);
+  }
+  return [...m.entries()].map(([dept, fs]) => ({
+    dept, n: [...fs.values()].reduce((s, v) => s + v, 0),
+    funcoes: [...fs.entries()].map(([f, n]) => ({ f, n })).sort((a, b) => b.n - a.n || a.f.localeCompare(b.f)),
+  })).sort((a, b) => (a.dept === "FRENTE DE CAIXA" ? -1 : b.dept === "FRENTE DE CAIXA" ? 1 : a.dept.localeCompare(b.dept)));
+}
+
+// cria (ou abre o salvo) o plano de um setor só quando ele é aberto
+function garantirPlano(k) {
+  if (est.planos[k]) return est.planos[k];
+  const d = est.dados, S = infoSetor(k);
+  const doQL = d.pessoas.filter(S.filtro);
+  const salvo = d.planos.find((x) => x.setor === k);
+  let p, versao = null, usuario = null, sujo = false;
+  if (salvo) { p = normalizarPlano(clonar(salvo.dados), k); versao = salvo.atualizado_em; usuario = salvo.usuario; }
+  else p = novoPlano(k, doQL, est.hoje);
+  // rascunho deste navegador (só vale se ninguém salvou por cima depois)
+  const rasc = lerRascunho(d.loja, k);
+  if (rasc && (rasc.base || null) === (versao || null)) {
+    p = normalizarPlano(rasc.p, k); sujo = true;
+    toast("Recuperei alterações que não tinham sido salvas.", "ok");
+  } else if (rasc) gravarRascunho(d.loja, k, null);
+  est.sync[k] = sincronizar(p, doQL);
+  est.planos[k] = { p, versao, usuario, sujo };
+  return est.planos[k];
+}
+function abrirSetor(k) {
+  est.setor = k; est.semanaMapa = 0;
+  gravarLocal("escala_web_setor", k);
+  const c = lerChave(k);
+  if (c) { est.ultimoPorDept[c.dept] = k; gravarLocal("escala_web_ultimo_dept", JSON.stringify(est.ultimoPorDept)); }
+  carregando(true);
+  setTimeout(() => { try { garantirPlano(k); render(); } finally { carregando(false); } }, 10);
+}
+
 // ---------- rascunho local ----------
-const chaveRasc = (loja, setor) => `escala_web_rasc_${loja}_${setor}`;
+const chaveRasc = (loja, setor) => `escala_web_rasc_${loja}_${encodeURIComponent(setor)}`;
 function lerRascunho(loja, setor) { try { return JSON.parse(lerLocal(chaveRasc(loja, setor))); } catch { return null; } }
 function gravarRascunho(loja, setor, obj) { gravarLocal(chaveRasc(loja, setor), obj ? JSON.stringify(obj) : null); }
 
@@ -221,7 +273,8 @@ function inferirTurnos(doQL, jornadaMin, fecha = "21:00") {
     const passa = M.saidaTurno(t) - limite;
     if (passa > 0) { t.entrada = M.fmtHM(Math.max(0, M.hm(entrada) - passa)); t.almoco = M.fmtHM(Math.max(0, M.hm(almoco) - passa)); }
     return t;
-  });
+  }).filter((t, i, arr) => arr.findIndex((u) => Math.abs(M.hm(u.entrada) - M.hm(t.entrada)) <= 20 && Math.abs(M.saidaTurno(u) - M.saidaTurno(t)) <= 20) === i)
+    .map((t, i, arr) => ({ ...t, id: "t" + (i + 1), nome: arr.length === 1 ? "Turno único" : i === 0 ? "Abertura" : i === arr.length - 1 ? "Fechamento" : arr.length === 3 ? "Intermediário" : `Intermediário ${i}` }));
 }
 
 function turnoParaEscala(p, escalaTxt) {
@@ -237,16 +290,16 @@ function turnoParaEscala(p, escalaTxt) {
 function novoPlano(setor, doQL, hoje) {
   const cenario = 42;
   const inicio = M.iso(M.domingoDe(hoje, true));
-  const n = doQL.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || doQL.length;
-  const S = SETORES[setor];
+  const naEscala = doQL.filter((x) => !motivoSemEscala(x));
+  const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
   const p = {
     v: VERSAO_PLANO, setor, cenario, inicio, semanas: 4,
     funcionamento: { segsab: ["08:00", "21:00"], dom: ["08:00", "12:00"] },
-    domingo: { entrada: "07:45", saida: "12:15", minimo: Math.max(1, Math.round(n * S.minDom)) },
+    domingo: { entrada: "07:45", saida: "12:15", minimo: Math.max(1, Math.round(n * MIN_DOM)) },
     domingosSeguidosMax: 2,
-    minimos: { geral: Math.max(1, Math.floor(n * S.minGeral)), faixas: [] },
+    minimos: { geral: Math.max(1, Math.floor(n * MIN_GERAL)), faixas: [] },
     pesos: { ...PESOS_PADRAO },
-    turnos: inferirTurnos(doQL, M.CENARIOS[cenario].jornadaMin),
+    turnos: inferirTurnos(naEscala, M.CENARIOS[cenario].jornadaMin),
     pessoas: [], grade: {}, travas: {},
   };
   return p;
@@ -275,11 +328,12 @@ function sincronizar(p, doQL) {
   for (const [id, x] of noQL) {
     let pe = p.pessoas.find((y) => y.id === id);
     if (!pe) {
-      pe = { id, nome: titulo(x.n), origem: "ql", turno: turnoParaEscala(p, x.e), domingo: "rodizio", folgaFixa: null, ativo: true };
+      pe = { id, nome: titulo(x.n), origem: "ql", turno: turnoParaEscala(p, x.e), domingo: "rodizio", folgaFixa: null, ativo: !motivoSemEscala(x) };
       p.pessoas.push(pe);
       if (!vazio) novos.push(pe.nome);
     }
-    pe.sit = x.s || ""; pe.senior = x.e || ""; pe.fora = false;
+    pe.sit = x.s || ""; pe.senior = x.e || ""; pe.funcao = x.f || ""; pe.fora = false;
+    const mot = motivoSemEscala(x); if (mot) pe.semEscala = mot; else delete pe.semEscala;
     if (/FERIAS|FÉRIAS/i.test(pe.sit)) pe.ferias = true; else delete pe.ferias;
   }
   for (const pe of p.pessoas) {
@@ -366,7 +420,7 @@ function addFaixa() {
 }
 function addExtra() {
   const p = plano();
-  const nome = prompt("Nome da pessoa extra (ex.: Coringa, Vaga em aberto, nome do novo contratado):", `${SETORES[est.setor].curto} extra`);
+  const nome = prompt("Nome da pessoa extra (ex.: Coringa, Vaga em aberto, nome do novo contratado):", `${infoSetor(est.setor).curto} extra`);
   if (!nome) return;
   p.pessoas.push({ id: "x:" + Date.now().toString(36), nome: nome.trim(), origem: "extra", turno: p.turnos[0].id, domingo: "rodizio", folgaFixa: null, ativo: true });
   alterou();
@@ -385,11 +439,11 @@ function removerExtra(id) {
 // ============================================================
 function paraGravar(p) {
   const c = clonar(p);
-  c.pessoas = c.pessoas.map(({ sit, ferias, ...x }) => x);
+  c.pessoas = c.pessoas.map(({ sit, ferias, semEscala, ...x }) => x);
   return c;
 }
 async function salvar() {
-  const sujos = ORDEM_SETORES.filter((s) => est.planos[s]?.sujo);
+  const sujos = Object.keys(est.planos).filter((s) => est.planos[s].sujo);
   if (!sujos.length) return;
   const btn = $("#btn-salvar"); if (btn) { btn.disabled = true; btn.textContent = "Salvando…"; }
   try {
@@ -402,11 +456,14 @@ async function salvar() {
         const m = String(e.message);
         if (!m.startsWith("CONFLITO:")) throw e;
         const quem = m.replace("CONFLITO:", "").trim();
-        if (!confirm(`${SETORES[setor].rotulo}: outra pessoa salvou esta escala depois que você abriu (${quem}).\n\nOK = gravar a sua versão por cima (a outra fica no histórico)\nCancelar = não gravar este setor agora`)) continue;
+        if (!confirm(`${infoSetor(setor).rotulo}: outra pessoa salvou esta escala depois que você abriu (${quem}).\n\nOK = gravar a sua versão por cima (a outra fica no histórico)\nCancelar = não gravar este setor agora`)) continue;
         r = await rpc("escala_web_salvar", { p_token: sessao.token, p_loja: est.loja, p_setor: setor, p_dados: paraGravar(reg.p), p_versao: reg.versao, p_forcar: true });
       }
       reg.versao = r.atualizado_em; reg.usuario = r.usuario; reg.sujo = false;
       gravarRascunho(est.loja, setor, null);
+      const i = est.dados.planos.findIndex((x) => x.setor === setor);
+      const novo = { setor, dados: paraGravar(reg.p), atualizado_em: r.atualizado_em, usuario: r.usuario };
+      if (i >= 0) est.dados.planos[i] = novo; else est.dados.planos.push(novo);
     }
     toast(algumSujo() ? "Parte das escalas foi salva." : "Escala salva.", algumSujo() ? "" : "ok");
   } catch (e) {
@@ -440,7 +497,7 @@ function exportarCSV() {
   const csv = "﻿" + linhas.map((l) => l.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-  a.download = `escala_5x2_${nomeLoja(est.loja).replace(" ", "")}_${est.setor}_${p.inicio}.csv`;
+  a.download = `escala_5x2_${nomeLoja(est.loja).replace(" ", "")}_${infoSetor(est.setor).curto.replace(/[^\p{L}\p{N}]+/gu, "-")}_${p.inicio}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
@@ -490,7 +547,7 @@ function htmlTopo(p) {
         <button class="btn btn-peq btn-vidro" data-acao="sair">Sair</button>
       </div>
     </div>
-    <p class="topo-sub">Simulador da frente de caixa a partir de ${ini ? M.dataBR(ini) : "-"}. Mude turnos, pessoas e folgas e veja na hora quem trabalha, quantas horas faz e onde falta gente.</p>
+    <p class="topo-sub">Simulador da escala de cada setor a partir de ${ini ? M.dataBR(ini) : "-"}. Mude turnos, pessoas e folgas e veja na hora quem trabalha, quantas horas faz e onde falta gente.</p>
     <div class="pilulas">
       <span class="pilula">Folgas <b>2 por semana</b></span>
       <span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}/dia</b></span>
@@ -504,14 +561,27 @@ function htmlTopo(p) {
   </div>`;
 }
 
+function marcasSetor(k) {
+  const reg = est.planos[k];
+  const salvo = est.dados.planos.some((x) => x.setor === k);
+  let s = "";
+  if (reg) {
+    const an = M.analisar(reg.p, ativos(reg.p));
+    s += `<span class="bolinha${an.problemas.length || an.avisos.length ? " ruim" : ""}"></span>`;
+  }
+  if (reg?.sujo) s += `<span class="qtd" title="não salvo">•</span>`;
+  else if (salvo) s += `<span class="salvo" title="escala salva">✓</span>`;
+  return s;
+}
 function htmlAbas() {
-  return `<nav class="abas nao-imprime">${ORDEM_SETORES.map((s) => {
-    const reg = est.planos[s];
-    const pes = ativos(reg.p);
-    const an = M.analisar(reg.p, pes);
-    const ruim = an.problemas.length > 0 || an.avisos.length > 0;
-    return `<button type="button" data-acao="setor" data-setor="${s}" class="${s === est.setor ? "ativo" : ""}">${SETORES[s].rotulo} <span class="qtd">${pes.length}</span><span class="bolinha${ruim ? " ruim" : ""}"></span>${reg.sujo ? " <span class='qtd'>•</span>" : ""}</button>`;
-  }).join("")}</nav>`;
+  const cur = lerChave(est.setor);
+  const salvosDept = (dept) => est.dados.planos.some((x) => lerChave(x.setor)?.dept === dept);
+  const sujoDept = (dept) => Object.keys(est.planos).some((k) => est.planos[k].sujo && lerChave(k)?.dept === dept);
+  const linhaD = est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${dp.dept === cur.dept ? "ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("");
+  const dp = est.estrutura.find((x) => x.dept === cur.dept);
+  const chips = dp ? [[chaveSetor(dp.dept), "Todas as funções", dp.n], ...dp.funcoes.map((f) => [chaveSetor(dp.dept, f.f), titulo(f.f), f.n])] : [];
+  const linhaF = chips.map(([k, r, n]) => `<button type="button" data-acao="setor" data-setor="${esc(k)}" class="chip-setor${k === est.setor ? " ativo" : ""}">${esc(r)} <span class="qtd">${n}</span>${marcasSetor(k)}</button>`).join("");
+  return `<nav class="abas nao-imprime">${linhaD}</nav><div class="funcoes nao-imprime"><span class="texto-fraco">Montar a escala de:</span>${linhaF}</div>`;
 }
 
 function htmlAvisoSync() {
@@ -521,7 +591,7 @@ function htmlAvisoSync() {
   const partes = [];
   if (s?.novos?.length) partes.push(`<span><b>Entraram do QL:</b> ${esc(s.novos.join(", "))} — clique em Redistribuir para encaixar.</span>`);
   if (fora.length) partes.push(`<span><b>Não estão mais no quadro do Senior (fora da escala):</b> ${esc(fora.map((x) => x.nome).join(", "))}</span>`);
-  if (!p.pessoas.length) partes.push(`<span>Nenhum colaborador ativo de <b>${esc(SETORES[est.setor].funcao)}</b> nesta loja no QL. Adicione uma pessoa extra lá embaixo para simular.</span>`);
+  if (!p.pessoas.length) partes.push(`<span>Nenhum colaborador ativo em <b>${esc(infoSetor(est.setor).rotulo)}</b> nesta loja no QL. Adicione uma pessoa extra lá embaixo para simular.</span>`);
   return partes.length ? `<div class="aviso-topo nao-imprime">${partes.join("")}</div>` : "";
 }
 
@@ -686,7 +756,7 @@ function htmlPessoas(p) {
   const optFolga = [["", "—"], ...[1, 2, 3, 4, 5, 6].map((d) => [d, M.DOW_LONGO[d]])];
   const linhas = p.pessoas.map((pe, i) => {
     if (pe.fora) return `<tr><td><b>${esc(pe.nome)}</b></td><td><span class="chip fora">fora do quadro do Senior</span></td><td colspan="5" class="texto-fraco">Não entra na escala.</td></tr>`;
-    const chip = pe.origem === "extra" ? `<span class="chip extra">extra</span>` : pe.ferias ? `<span class="chip ferias">${esc(titulo(pe.sit))}</span>` : `<span class="chip">${esc(titulo(pe.sit || "Ativo"))}</span>`;
+    const chip = (pe.semEscala ? `<span class="chip fora">${esc(pe.semEscala)}</span> ` : "") + (lerChave(est.setor)?.funcao || !pe.funcao ? "" : `<span class="chip">${esc(titulo(pe.funcao))}</span> `) + (pe.origem === "extra" ? `<span class="chip extra">extra</span>` : pe.ferias ? `<span class="chip ferias">${esc(titulo(pe.sit))}</span>` : `<span class="chip">${esc(titulo(pe.sit || "Ativo"))}</span>`);
     const nome = pe.origem === "extra" ? `<input class="ent nome-in" value="${esc(pe.nome)}" data-bind="pessoas.${i}.nome">` : `<b>${esc(pe.nome)}</b>`;
     return `<tr>
       <td>${nome}</td>
@@ -698,7 +768,7 @@ function htmlPessoas(p) {
       <td>${pe.origem === "extra" ? `<button class="btn-x" data-acao="rm-extra" data-id="${esc(pe.id)}" title="Remover">✕</button>` : ""}</td></tr>`;
   }).join("");
   return `<section class="cartao">
-    <div class="cartao-cab"><div><h2>Pessoas e regras</h2><p class="sub">Vêm do Quadro de Lotação (quadro do Senior, ${esc(SETORES[est.setor].funcao)} ativos da loja). Escolha o turno de cada uma, a regra do domingo e, se tiver, a folga fixa. Pessoa extra = coringa, vaga em aberto ou contratação nova.</p></div>
+    <div class="cartao-cab"><div><h2>Pessoas e regras</h2><p class="sub">Vêm do Quadro de Lotação (quadro do Senior: ${esc(infoSetor(est.setor).rotulo)}, ativos da loja). Escolha o turno de cada uma, a regra do domingo e, se tiver, a folga fixa. Pessoa extra = coringa, vaga em aberto ou contratação nova.</p></div>
       <div class="ferramentas nao-imprime"><button class="btn btn-borda" data-acao="recarregar" title="Busca de novo o quadro do QL">Atualizar do QL</button><button class="btn btn-borda" data-acao="add-extra">+ Pessoa extra</button></div></div>
     <div class="rolagem-conf"><table class="conf"><thead><tr><th>Nome</th><th>Situação · horário Senior</th><th>Turno</th><th>Domingo</th><th>Folga fixa</th><th></th><th></th></tr></thead><tbody>${linhas || `<tr><td colspan="7" class="texto-fraco">Ninguém neste setor.</td></tr>`}</tbody></table></div>
   </section>`;
@@ -706,7 +776,7 @@ function htmlPessoas(p) {
 
 function htmlBarra() {
   const b = $("#barra-salvar");
-  const sujos = ORDEM_SETORES.filter((s) => est.planos[s]?.sujo);
+  const sujos = Object.keys(est.planos).filter((s) => est.planos[s].sujo);
   const reg = est.planos[est.setor];
   if (!sujos.length) {
     b.hidden = !reg?.versao;
@@ -714,7 +784,7 @@ function htmlBarra() {
     return;
   }
   b.hidden = false;
-  b.innerHTML = `<span>Alterações não salvas: <b>${sujos.map((s) => SETORES[s].rotulo).join(", ")}</b></span><button class="btn btn-primario btn-peq" id="btn-salvar" data-acao="salvar">Salvar</button>`;
+  b.innerHTML = `<span>Alterações não salvas: <b>${sujos.map((s) => infoSetor(s).rotulo).join(", ")}</b></span><button class="btn btn-primario btn-peq" id="btn-salvar" data-acao="salvar">Salvar</button>`;
 }
 
 // ============================================================
@@ -736,7 +806,8 @@ document.addEventListener("click", (ev) => {
     document.documentElement.dataset.theme = atual; gravarLocal("escala_web_tema", atual); return;
   }
   if (a === "imprimir") return window.print();
-  if (a === "setor") { est.setor = el.dataset.setor; gravarLocal("escala_web_setor", est.setor); est.semanaMapa = 0; return render(); }
+  if (a === "setor") return abrirSetor(el.dataset.setor);
+  if (a === "dept") { const dpt = el.dataset.dept; return abrirSetor(est.ultimoPorDept[dpt] && lerChave(est.ultimoPorDept[dpt])?.dept === dpt ? est.ultimoPorDept[dpt] : chaveSetor(dpt)); }
   if (a === "cenario") return trocarCenario(+el.dataset.h);
   if (a === "redistribuir") return redistribuirAgora();
   if (a === "destravar") return destravar();
@@ -753,7 +824,7 @@ document.addEventListener("click", (ev) => {
 });
 
 function salvarRascunhosTodos() {
-  for (const s of ORDEM_SETORES) { const r = est.planos[s]; if (r?.sujo) gravarRascunho(est.loja, s, { base: r.versao, p: r.p }); }
+  for (const s of Object.keys(est.planos)) { const r = est.planos[s]; if (r.sujo) gravarRascunho(est.loja, s, { base: r.versao, p: r.p }); }
 }
 
 document.addEventListener("change", (ev) => {

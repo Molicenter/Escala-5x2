@@ -309,12 +309,20 @@
 
   // ---------- horário do Senior → entrada / almoço ----------
   // "SG-SB 12:00-15:00 17:00-21:20" ou "SEG/SB 13:10 15:00 16:50 22:20"
+  // "SG-SX 7:00-17:00 SB 7:00-11:00" (seg a sex corrido + sábado curto) → usa o horário de seg a sex,
+  // com almoço de 1h no meio do dia
   function lerEscalaSenior(txt) {
-    const hs = String(txt || "").match(/\d{1,2}:\d{2}/g);
-    if (!hs || hs.length < 4) return null;
-    const [a, b, c, d] = hs.slice(0, 4).map(hm);
-    if (!(a < b && b < c && c < d)) return null;
-    return { entrada: fmtHM(a), almoco: fmtHM(b), almocoMin: c - b, jornadaMin: (b - a) + (d - c), saida: fmtHM(d) };
+    const hs = (String(txt || "").match(/\d{1,2}:\d{2}/g) || []).map(hm);
+    if (hs.length >= 4) {
+      const [a, b, c, d] = hs;
+      if (a < b && b < c && c < d) return { entrada: fmtHM(a), almoco: fmtHM(b), almocoMin: c - b, jornadaMin: (b - a) + (d - c), saida: fmtHM(d) };
+    }
+    if (hs.length >= 2 && hs[0] < hs[1] && hs[1] - hs[0] >= 360) {
+      const [a, d] = hs;
+      const meio = Math.round(((a + d) / 2 - 30) / 15) * 15;
+      return { entrada: fmtHM(a), almoco: fmtHM(meio), almocoMin: 60, jornadaMin: d - a - 60, saida: fmtHM(d) };
+    }
+    return null;
   }
 
   window.Motor = {
