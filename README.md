@@ -1,17 +1,25 @@
-# Simulador de Escala 5x2 - Gestão de Lojas
+# Escala 5x2 · Molicenter — app web
 
-Aplicação web interativa em JavaScript puro (HTML5 + Tailwind CSS + Vanilla JS) para simulação, planejamento e transição gradativa da escala **6x1 para 5x2** nas lojas da rede.
+Simulador e controle da escala 5x2 da frente de caixa das 8 lojas (operadoras, fiscais e empacotadores).
+App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`, no mesmo modelo do QL web.
 
-## Como rodar pelo GitHub (GitHub Pages)
+- **Login:** o mesmo do Quadro de Lotação (usuários e senhas do QL). Quem já entrou no QL neste navegador entra direto. Login de loja vê só a própria loja.
+- **Colaboradores:** vêm do quadro do Senior que o QL já guarda (`ql_web_quadro_senior`): departamento FRENTE DE CAIXA, funções OPERADOR CAIXA, FISCAL DE CAIXA e EMPACOTADOR, que não estejam demitidos. Atualizou o Excel no QL → clique em "Atualizar do QL" aqui.
+- **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
-1. Crie um novo repositório no seu GitHub (ex: `simulador-escala-5x2`).
-2. Faça o upload dos arquivos deste pacote (`index.html`, `app.js`, `style.css` e `README.md`) na raiz do repositório.
-3. No repositório do GitHub, acesse a aba **Settings** (Configurações) > **Pages** (no menu lateral esquerdo).
-4. Em **Build and deployment** > **Branch**, selecione a branch `main` (ou `master`), mantenha a pasta `/ (root)` e clique em **Save**.
-5. Aguarde cerca de 1 minuto e seu sistema estará online no link gerado pelo próprio GitHub!
+## O que tem
+- Cenários 44h / 42h / 40h, jornada por turno, saída calculada (entrada + jornada + almoço)
+- Escala de 1 a 8 semanas a partir de um domingo, com T (trabalha), F (folga), D (domingo, meio período) e X (ausente)
+- Redistribuição automática: domingo em rodízio (só o mínimo necessário, respeitando o máximo de domingos seguidos) e as folgas de seg a sáb nos dias de menos movimento sem furar o mínimo; ajustes feitos à mão ficam travados
+- Mapa de cobertura de 15 em 15 minutos, descontando almoço (vermelho / verde-claro / verde forte)
+- "O que precisa de atenção": dias com falta de gente, semanas sem 2 folgas, acima das horas, mais de 6 dias seguidos, domingos seguidos
+- Mínimo geral, faixas de reforço por dia/horário e mínimo do domingo
+- Pessoas extras (coringa, vaga em aberto), folga fixa e regra de domingo por pessoa
+- Imprimir / PDF e baixar planilha (CSV que abre no Excel)
 
-## Funcionalidades incluídas
-- **Multi-lojas:** alterne entre as lojas da rede no topo da página.
-- **3 Cenários de Transição:** 44h (compensado), 42h (transição) e 40h (meta final).
-- **Detector de Gargalos em Tempo Real:** identifica automaticamente faixas de horário e intervalos de almoço descobertos.
-- **Salvamento Automático Local (`localStorage`):** os testes feitos no navegador não são perdidos ao atualizar a página, com opção de exportar em `.json`.
+## Publicar
+1. Rodar no Supabase (SQL Editor) o arquivo `sql/01_escala_web.sql` — só cria tabelas e funções novas com prefixo `escala_`, não mexe nas do QL.
+2. Subir a pasta `docs/` e o `sql/` neste repositório (pode apagar o `index.html`, `app.js` e `style.css` antigos da raiz).
+3. Settings → Pages → Branch `main`, pasta **/docs** → Save.
+
+**Este repositório não guarda dados de colaboradores** — eles só ficam no Supabase.

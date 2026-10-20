@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0B3D63">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Escala 5x2 · Molicenter</title>
+  <link rel="icon" href="logo.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icone-apple-180.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Escala 5x2">
+  <script>
+    try { var t = localStorage.getItem("escala_web_tema"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="style.css?v=1.0.0">
+</head>
+<body>
+  <!-- =================== LOGIN =================== -->
+  <section id="tela-login" class="tela-login" hidden>
+    <form id="form-login" class="login-cartao" autocomplete="off">
+      <div class="marca">
+        <img class="marca-selo" src="logo.png" alt="Passarinho Molicenter">
+        <div>
+          <h1>Escala 5x2</h1>
+          <p>Frente de caixa · Molicenter</p>
+        </div>
+      </div>
+      <label class="campo">
+        <span>E-mail corporativo (mesmo login do QL)</span>
+        <select id="login-usuario"></select>
+      </label>
+      <label class="campo">
+        <span>Senha</span>
+        <!-- type="text" + máscara via CSS: o Chrome não oferece salvar/gerar senha -->
+        <input id="login-senha" type="text" class="senha" autocomplete="off" autocapitalize="off"
+               autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+      </label>
+      <p id="login-erro" class="erro" hidden></p>
+      <button class="btn btn-primario btn-bloco" type="submit" id="btn-entrar">Entrar</button>
+      <p class="versao" id="versao-login"></p>
+    </form>
+  </section>
+
+  <!-- =================== APP =================== -->
+  <div id="app" hidden>
+    <header class="topo" id="topo"></header>
+    <main class="miolo" id="conteudo"></main>
+    <div class="barra-salvar nao-imprime" id="barra-salvar" hidden></div>
+  </div>
+
+  <div id="carregando" class="carregando" hidden><div class="giro"></div></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="config.js?v=1.0.0"></script>
+  <script src="motor.js?v=1.0.0"></script>
+  <script src="app.js?v=1.0.0"></script>
+  <script>
+    if ("serviceWorker" in navigator && location.protocol === "https:") {
+      navigator.serviceWorker.register("sw.js").catch(function () {});
+    }
+  </script>
+</body>
+</html>
