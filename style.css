@@ -1,0 +1,10 @@
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #f3f4f6;
+}
+
+.tab-active {
+  border-bottom: 3px solid #f59e0b;
+  color: #111827;
+  font-weight: 600;
+}
