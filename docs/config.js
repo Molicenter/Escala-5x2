@@ -4,5 +4,5 @@
 window.CONFIG = {
   SUPABASE_URL: "https://eemfqkxshqqlhdyofgoz.supabase.co",
   SUPABASE_KEY: "sb_publishable_ZwBOMu1KwPQB2AwNeh08tw_g93KC9d5",
-  VERSAO: "1.2.0",
+  VERSAO: "1.3.0",
 };

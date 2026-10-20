@@ -164,6 +164,9 @@ const est = {
   dados: null,            // resposta do escala_web_dados
   planos: {},             // setor → { p (plano), versao, usuario, sujo }
   semanaMapa: 0,
+  aba: lerLocal("escala_web_aba") || "escala",
+  verSemana: "todas",
+  mostrarMinimo: false,
   mostrarTodosAlertas: false,
   sync: {},               // setor → { novos:[], saiu:[] }
 };
@@ -273,7 +276,9 @@ function inferirTurnos(doQL, jornadaMin, fecha = "21:00") {
   return top.map(([entrada, almoco, am], i) => {
     const t = { id: "t" + (i + 1), nome: nomes[i], entrada, almoco, almocoMin: +am, jornadaMin };
     const passa = M.saidaTurno(t) - limite;
-    if (passa > 0) { t.entrada = M.fmtHM(Math.max(0, M.hm(entrada) - passa)); t.almoco = M.fmtHM(Math.max(0, M.hm(almoco) - passa)); }
+    // adianta em múltiplos de 15 min para não ficar com horário quebrado (ex.: 11:06)
+    const adianta = Math.ceil(passa / 15) * 15;
+    if (passa > 0) { t.entrada = M.fmtHM(Math.max(0, M.hm(entrada) - adianta)); t.almoco = M.fmtHM(Math.max(0, M.hm(almoco) - adianta)); }
     return t;
   }).filter((t, i, arr) => arr.findIndex((u) => Math.abs(M.hm(u.entrada) - M.hm(t.entrada)) <= 20 && Math.abs(M.saidaTurno(u) - M.saidaTurno(t)) <= 20) === i)
     .map((t, i, arr) => ({ ...t, id: "t" + (i + 1), nome: arr.length === 1 ? "Turno único" : i === 0 ? "Abertura" : i === arr.length - 1 ? "Fechamento" : arr.length === 3 ? "Intermediário" : `Intermediário ${i}` }));
@@ -389,6 +394,17 @@ function redistribuirAgora() {
   M.redistribuir(p, ativos(p));
   alterou();
   toast("Folgas redistribuídas. Os ajustes feitos à mão (bolinha rosa) foram mantidos.", "ok");
+}
+function escalonarAgora() {
+  const p = plano();
+  carregando(true);
+  setTimeout(() => {
+    try {
+      const r = M.escalonarAlmocos(p, ativos(p));
+      alterou();
+      toast(r.depois < r.antes ? "Almoços escalonados: o buraco de cobertura diminuiu." : "Os almoços já estavam no melhor encaixe possível com esses turnos.", r.depois < r.antes ? "ok" : "");
+    } finally { carregando(false); }
+  }, 20);
 }
 function destravar() {
   const p = plano();
@@ -512,6 +528,13 @@ function opcoes(lista, atual) {
 }
 const fmtHoraPilula = (h) => h.replace(":", "h");
 
+const VISOES = [
+  ["escala", "Escala", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>'],
+  ["cobertura", "Cobertura", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'],
+  ["regras", "Turnos e mínimos", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'],
+  ["pessoas", "Pessoas", '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/></svg>'],
+];
+
 function render() {
   if (!est.dados || !plano()) return;
   // guarda a rolagem lateral das tabelas
@@ -522,10 +545,19 @@ function render() {
   const pessoas = ativos(p);
   const an = M.analisar(p, pessoas);
   if (est.semanaMapa >= p.semanas) est.semanaMapa = 0;
+  if (est.verSemana !== "todas" && +est.verSemana >= p.semanas) est.verSemana = "todas";
+  const visao = VISOES.some((v) => v[0] === est.aba) ? est.aba : "escala";
+  const corpo = visao === "escala" ? htmlEscala(p, pessoas, an)
+    : visao === "cobertura" ? htmlMapa(p, an)
+    : visao === "regras" ? `<div class="duas">${htmlTurnos(p)}${htmlMinimos(p)}</div>`
+    : htmlPessoas(p);
   $("#topo").innerHTML = htmlTopo(p);
   $("#conteudo").innerHTML = [
-    htmlAbas(), htmlAvisoSync(), htmlKpis(p, pessoas, an), htmlAlertas(p, an), htmlEscala(p, pessoas, an), htmlMapa(p, an),
-    `<div class="duas">${htmlTurnos(p)}${htmlMinimos(p)}</div>`, htmlPessoas(p),
+    htmlAbas(), htmlAvisoSync(),
+    `<div class="painel">${htmlKpis(p, pessoas, an)}${htmlAlertas(p, an)}</div>`,
+    htmlRoteiro(p, an),
+    `<nav class="visoes nao-imprime">${VISOES.map(([id, r, ic]) => `<button type="button" data-acao="visao" data-v="${id}" class="${id === visao ? "ativo" : ""}">${ic}<span>${r}</span>${id === "cobertura" && an.faixasAbaixo ? `<em>${an.problemas.length}</em>` : ""}</button>`).join("")}</nav>`,
+    corpo,
   ].join("");
   htmlBarra();
   $$("[data-rolagem]").forEach((el) => { if (rol[el.dataset.rolagem] != null) el.scrollLeft = rol[el.dataset.rolagem]; });
@@ -537,28 +569,23 @@ function htmlTopo(p) {
     ? `<span class="loja-fixa">${nomeLoja(est.loja)}</span>`
     : `<select class="sel-loja" data-acao-change="loja" aria-label="Loja">${opcoes(lojas.map((l) => [l, nomeLoja(l)]), est.loja)}</select>`;
   const j = M.CENARIOS[p.cenario];
-  const ini = M.lerISO(p.inicio);
   const dom = `${fmtHoraPilula(p.domingo.entrada)}–${fmtHoraPilula(p.domingo.saida)}`;
   return `<div class="topo-in">
     <div class="topo-linha">
       <div class="topo-titulo"><img src="logo.png" alt=""><h1>Escala 5x2 <span class="ponto">·</span> ${seletor}</h1></div>
+      <div class="pilulas">
+        <span class="pilula">Folgas <b>2/sem</b></span>
+        <span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>
+        <span class="pilula">Seg–sáb <b>${fmtHoraPilula(p.funcionamento.segsab[0])}–${fmtHoraPilula(p.funcionamento.segsab[1])}</b></span>
+        <span class="pilula">Dom <b>${dom}</b></span>
+      </div>
       <div class="topo-conta">
+        <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${p.cenario === h ? "ativo" : ""}" title="${M.CENARIOS[h].rotulo}">${h}h</button>`).join("")}</div>
         <div class="quem"><strong>${esc(sessao.email)}</strong>${esc(ROTULO_PERFIL[sessao.perfil] || "")}</div>
-        <button class="btn btn-peq btn-vidro" data-acao="imprimir" title="Imprimir ou salvar em PDF">Imprimir / PDF</button>
+        <button class="btn btn-peq btn-vidro" data-acao="imprimir" title="Imprimir ou salvar em PDF">PDF</button>
         <button class="btn btn-peq btn-vidro" data-acao="tema" title="Tema claro/escuro">◐</button>
         <button class="btn btn-peq btn-vidro" data-acao="sair">Sair</button>
       </div>
-    </div>
-    <p class="topo-sub">Simulador da escala de cada setor a partir de ${ini ? M.dataBR(ini) : "-"}. Mude turnos, pessoas e folgas e veja na hora quem trabalha, quantas horas faz e onde falta gente.</p>
-    <div class="pilulas">
-      <span class="pilula">Folgas <b>2 por semana</b></span>
-      <span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}/dia</b></span>
-      <span class="pilula">Semana <b>${p.cenario}h máx.</b></span>
-      <span class="pilula">Seg a sáb <b>${fmtHoraPilula(p.funcionamento.segsab[0])}–${fmtHoraPilula(p.funcionamento.segsab[1])}</b></span>
-      <span class="pilula">Domingo <b>${dom}</b></span>
-    </div>
-    <div class="cenarios"><span>Cenário:</span>
-      ${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${p.cenario === h ? "ativo" : ""}">${M.CENARIOS[h].rotulo}</button>`).join("")}
     </div>
   </div>`;
 }
@@ -583,7 +610,8 @@ function htmlAbas() {
   const dp = est.estrutura.find((x) => x.dept === cur.dept);
   const chips = dp ? [[chaveSetor(dp.dept), "Todas as funções", dp.n], ...dp.funcoes.map((f) => [chaveSetor(dp.dept, f.f), titulo(f.f), f.n])] : [];
   const linhaF = chips.map(([k, r, n]) => `<button type="button" data-acao="setor" data-setor="${esc(k)}" class="chip-setor${k === est.setor ? " ativo" : ""}">${esc(r)} <span class="qtd">${n}</span>${marcasSetor(k)}</button>`).join("");
-  return `<nav class="abas nao-imprime">${linhaD}</nav><div class="funcoes nao-imprime"><span class="texto-fraco">Montar a escala de:</span>${linhaF}</div>`;
+  return `<nav class="abas nao-imprime">${linhaD}</nav><div class="funcoes nao-imprime"><span class="texto-fraco">Montar a escala de:</span>${linhaF}</div>
+    <h2 class="titulo-impressao">${esc(nomeLoja(est.loja))} · ${esc(infoSetor(est.setor).rotulo)}</h2>`;
 }
 
 function htmlAvisoSync() {
@@ -593,7 +621,7 @@ function htmlAvisoSync() {
   const partes = [];
   if (s?.novos?.length) partes.push(`<span><b>Entraram do QL:</b> ${esc(s.novos.join(", "))} — clique em Redistribuir para encaixar.</span>`);
   if (fora.length) partes.push(`<span><b>Não estão mais no quadro do Senior (fora da escala):</b> ${esc(fora.map((x) => x.nome).join(", "))}</span>`);
-  if (!p.pessoas.length) partes.push(`<span>Nenhum colaborador ativo em <b>${esc(infoSetor(est.setor).rotulo)}</b> nesta loja no QL. Adicione uma pessoa extra lá embaixo para simular.</span>`);
+  if (!ativos(p).length) partes.push(`<span>Ninguém na escala em <b>${esc(infoSetor(est.setor).rotulo)}</b>${p.pessoas.length ? " (quem está aqui é ART 62 / aprendiz ou foi tirado da escala)" : ""}. Veja a aba Pessoas ou adicione uma pessoa extra.</span>`);
   return partes.length ? `<div class="aviso-topo nao-imprime">${partes.join("")}</div>` : "";
 }
 
@@ -606,79 +634,120 @@ function htmlKpis(p, pessoas, an) {
   const diasSem = an.porDia.reduce((s, x) => s + x.trab, 0) / p.semanas;
   const horas = pessoas.flatMap((pe) => an.horas[pe.id].map((h) => h.min));
   const mediaH = horas.length ? horas.reduce((s, x) => s + x, 0) / horas.length : 0;
-  const nProb = an.problemas.length + new Set(an.avisos.map((a) => a.pid)).size;
+  // quantas pessoas a mais resolveriam o pior buraco (maior falta num mesmo horário)
+  const piorFalta = Math.max(0, ...an.porDia.map((x) => Math.max(0, ...x.min.map((m, k) => m - x.cov[k]))));
   return `<section class="kpis">
-    <div class="kpi"><div class="rot">Pessoas no setor</div><div class="val">${n}</div><div class="det">${num1(mediaDom)} em média no domingo</div></div>
-    <div class="kpi"><div class="rot">Por dia, seg a sáb</div><div class="val">${num1(mediaDia)}<small>no 5x2</small></div><div class="det">hoje no 6x1: ~${num1(hoje6x1)} (${mediaDia - hoje6x1 >= 0 ? "+" : ""}${num1(mediaDia - hoje6x1)}/dia)</div></div>
-    <div class="kpi"><div class="rot">Dias de trabalho/semana</div><div class="val">${Math.round(diasSem)}<small>de ${n * 6}</small></div><div class="det${n * 6 - diasSem > 0 ? " ruim" : ""}">perde ${Math.round(n * 6 - diasSem)} dia(s) por semana</div></div>
-    <div class="kpi"><div class="rot">Horas médias/pessoa</div><div class="val">${M.fmtDur(Math.round(mediaH))}</div><div class="det">limite ${p.cenario}h · domingo curto puxa pra baixo</div></div>
-    <div class="kpi${nProb ? " kpi-ruim" : ""}"><div class="rot">Situação</div><div class="val">${nProb}<small>${nProb === 1 ? "problema" : "problemas"}</small></div><div class="det">${an.faixasAbaixo} faixa(s) de 15 min abaixo do mínimo</div></div>
+    <div class="kpi"><div class="rot">Pessoas</div><div class="val">${n}</div><div class="det">${num1(mediaDom)} no domingo (média)</div></div>
+    <div class="kpi"><div class="rot">Por dia, seg a sáb</div><div class="val">${num1(mediaDia)}</div><div class="det">no 6x1 seria ~${num1(hoje6x1)} (${num1(mediaDia - hoje6x1)})</div></div>
+    <div class="kpi"><div class="rot">Dias trabalhados/sem</div><div class="val">${Math.round(diasSem)}<small>de ${n * 6}</small></div><div class="det${n * 6 - diasSem > 0 ? " ruim" : ""}">perde ${Math.round(n * 6 - diasSem)} dia(s)/semana</div></div>
+    <div class="kpi"><div class="rot">Horas médias</div><div class="val">${M.fmtDur(Math.round(mediaH))}</div><div class="det">limite ${p.cenario}h por semana</div></div>
+    <div class="kpi${an.faixasAbaixo ? " kpi-ruim" : " kpi-bom"}"><div class="rot">Cobertura</div><div class="val">${an.faixasAbaixo ? `${an.faixasAbaixo}<small>faixas</small>` : "OK"}</div><div class="det">${an.faixasAbaixo ? `abaixo do mínimo · pior buraco: falta ${piorFalta}` : "nenhum horário abaixo do mínimo"}</div></div>
   </section>`;
 }
 
 function htmlAlertas(p, an) {
   const itens = [];
   for (const pr of an.problemas) {
-    const ex = pr.faixas.slice(0, 3).join(", ") + (pr.faixas.length > 3 ? "…" : "");
-    itens.push(`<div class="alerta"><span class="selo">Problema</span><span><b>${M.DOW_LONGO[pr.dow]}:</b> falta gente em ${pr.semanas} de ${pr.total} semana${pr.total > 1 ? "s" : ""} (ex.: ${esc(ex)}).</span></div>`);
+    const ex = pr.faixas.slice(0, 2).join(", ") + (pr.faixas.length > 2 ? "…" : "");
+    itens.push(`<button type="button" class="alerta" data-acao="ir-problema" data-w="${pr.primeiraSemana}"><span class="selo">${M.DOW[pr.dow]}</span><span>falta gente em <b>${pr.semanas}/${pr.total}</b> sem. · ${esc(ex)}${pr.pior > 1 ? ` · falta até ${pr.pior}` : ""}</span></button>`);
   }
   const porPessoa = new Map();
   for (const a of an.avisos) { if (!porPessoa.has(a.pid)) porPessoa.set(a.pid, { nome: a.nome, txt: [] }); porPessoa.get(a.pid).txt.push(a.txt); }
-  for (const [, v] of porPessoa) itens.push(`<div class="alerta aviso"><span class="selo">Atenção</span><span><b>${esc(v.nome)}:</b> ${esc(v.txt.join(" · "))}</span></div>`);
-  if (!itens.length) itens.push(`<div class="alerta ok"><span class="selo">Tudo certo</span><span>Nenhuma faixa abaixo do mínimo e ninguém fora das regras (2 folgas, ${p.cenario}h, até 6 dias seguidos, até ${p.domingosSeguidosMax} domingos seguidos).</span></div>`);
-  const LIM = 8;
+  for (const [, v] of porPessoa) itens.push(`<button type="button" class="alerta aviso" data-acao="visao" data-v="escala"><span class="selo">Regra</span><span><b>${esc(v.nome)}:</b> ${esc(v.txt.join(" · "))}</span></button>`);
+  if (!itens.length) itens.push(`<div class="alerta ok"><span class="selo">OK</span><span>Tudo certo: cobertura acima do mínimo e todo mundo dentro das regras (2 folgas, ${p.cenario}h, até 6 dias seguidos, até ${p.domingosSeguidosMax} domingos seguidos).</span></div>`);
+  const LIM = 6;
   const mostrar = est.mostrarTodosAlertas ? itens : itens.slice(0, LIM);
-  return `<section class="cartao">
-    <div class="cartao-cab"><div><h2>O que precisa de atenção</h2><p class="sub">Faixas de 15 minutos abaixo do mínimo e regras de cada pessoa.</p></div></div>
+  return `<section class="cartao atencao">
+    <div class="atencao-cab"><h2>O que precisa de atenção</h2>${itens.length > LIM ? `<button class="btn btn-peq btn-borda nao-imprime" data-acao="mais-alertas">${est.mostrarTodosAlertas ? "Menos" : `Ver todos (${itens.length})`}</button>` : ""}</div>
     <div class="alertas">${mostrar.join("")}</div>
-    ${itens.length > LIM ? `<p class="nao-imprime"><button class="btn btn-peq btn-borda" data-acao="mais-alertas">${est.mostrarTodosAlertas ? "Mostrar menos" : `Mostrar todos (${itens.length})`}</button></p>` : ""}
   </section>`;
 }
 
+// passo a passo para montar a escala (cada passo leva para a aba certa)
+function htmlRoteiro(p, an) {
+  const pessoas = ativos(p);
+  // mesmo horário de almoço para 3+ pessoas do turno só é problema se a cobertura está faltando
+  const almocosIguais = an.faixasAbaixo > 0 && p.turnos.some((t) => {
+    const cont = {};
+    for (const x of pessoas.filter((y) => y.turno === t.id)) { const k = M.almocoDe(t, x); cont[k] = (cont[k] || 0) + 1; }
+    return Object.values(cont).some((n) => n >= 3);
+  });
+  const passos = [
+    ["regras", "1", "Conferir turnos e horário da loja", `${p.turnos.length} turno(s)`],
+    ["pessoas", "2", "Turno e domingo de cada pessoa", `${pessoas.length} na escala`],
+    ["regras", "3", "Mínimo de pessoas no posto", `mín. ${p.minimos.geral} · ${p.minimos.faixas.length} faixa(s)`],
+    ["auto", "4", "Redistribuir folgas", "rodízio e folgas"],
+    ["almoco", "5", "Escalonar almoços", almocosIguais ? "almoços juntos" : "ok"],
+    ["cobertura", "6", "Conferir a cobertura", an.faixasAbaixo ? `${an.faixasAbaixo} faixa(s) em falta` : "sem falta"],
+  ];
+  return `<div class="roteiro nao-imprime">${passos.map(([alvo, n, r, s]) => {
+    const ruim = (n === "5" && almocosIguais) || (n === "6" && an.faixasAbaixo);
+    return `<button type="button" data-acao="passo" data-alvo="${alvo}" class="${ruim ? "ruim" : ""}"><i>${n}</i><span><b>${r}</b><small>${esc(s)}</small></span></button>`;
+  }).join("")}</div>`;
+}
+
 function htmlEscala(p, pessoas, an) {
-  const dias = an.dias;
+  const todos = an.dias;
+  const semanasVis = est.verSemana === "todas" ? [...Array(p.semanas).keys()] : [+est.verSemana];
+  const dias = todos.filter((d) => semanasVis.includes(d.semana));
   const fim = M.somaDias(M.lerISO(p.inicio), p.semanas * 7 - 1);
   const totTravas = Object.values(p.travas).reduce((s, o) => s + Object.keys(o).length, 0);
-  let cabSem = `<tr class="cab-sem"><th class="col-nome" rowspan="2">Nome</th>`;
-  for (let w = 0; w < p.semanas; w++) {
-    const a = dias[w * 7].d, b = dias[w * 7 + 6].d;
-    cabSem += `<th colspan="7">Semana ${w + 1} · ${M.dataCurta(a)}–${M.dataCurta(b)}</th>`;
+  const hojeISO = est.hoje ? M.iso(est.hoje) : "";
+  const porFuncao = !lerChave(est.setor)?.funcao;
+  const nCols = dias.length + semanasVis.length + 1;
+
+  let cabSem = `<tr class="cab-sem"><th class="col-nome" rowspan="2">Nome · almoço</th>`;
+  for (const w of semanasVis) {
+    const a = todos[w * 7].d, b = todos[w * 7 + 6].d;
+    cabSem += `<th colspan="7" class="ini-sem">Semana ${w + 1} · ${M.dataCurta(a)}–${M.dataCurta(b)}</th>`;
   }
-  for (let w = 0; w < p.semanas; w++) cabSem += `<th class="col-h" rowspan="2">Sem ${w + 1}</th>`;
-  cabSem += "</tr>";
-  const cabDia = `<tr class="cab-dia">${dias.map((d) => `<th class="${d.dow === 0 ? "dom " : ""}${d.dow === 0 ? "ini-sem" : ""}">${d.d.getUTCDate()}<small>${M.DOW[d.dow]}</small></th>`).join("")}</tr>`;
+  cabSem += `<th class="col-h" colspan="${semanasVis.length}">Horas</th></tr>`;
+  const cabDia = `<tr class="cab-dia">${dias.map((d) => `<th class="${d.dow === 0 ? "dom ini-sem" : ""}${d.iso === hojeISO ? " hoje" : ""}">${d.d.getUTCDate()}<small>${M.DOW[d.dow].slice(0, 3)}</small></th>`).join("")}${semanasVis.map((w) => `<th class="col-h">S${w + 1}</th>`).join("")}</tr>`;
 
   const avisosP = new Set(an.avisos.map((a) => a.pid));
-  const linhas = pessoas.map((pe) => {
+  const linhaPessoa = (pe) => {
     const t = M.turnoDe(p, pe);
     const tr = p.travas[pe.id] || {};
+    const alm = t && t.almocoMin ? M.fmtHM(M.almocoDe(t, pe)) : "—";
     const cels = dias.map((d) => {
       const v = M.valor(p, pe.id, d);
-      const tit = v === "T" ? `${t?.nome}: ${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""}` : v === "D" ? `Domingo ${p.domingo.entrada}–${p.domingo.saida}` : v === "F" ? "Folga" : "Ausente (férias/atestado)";
-      return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v}</button></td>`;
+      const tit = v === "T" ? `${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""} · almoço ${alm}` : v === "D" ? `Domingo ${p.domingo.entrada}–${p.domingo.saida}` : v === "F" ? "Folga" : "Ausente (férias/atestado)";
+      return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(pe.nome + " · " + M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v === "T" ? "" : v}</button></td>`;
     }).join("");
-    const hs = an.horas[pe.id].map((h) => `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`).join("");
-    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(t?.nome || "-")} · ${esc(t?.entrada || "")}${pe.ferias ? " · férias no QL" : ""}</small></td>${cels}${hs}</tr>`;
-  }).join("");
-  const total = `<tr class="total"><td class="col-nome"><b>Trabalhando</b></td>${an.porDia.map((x) => `<td class="${x.dow === 0 ? "ini-sem dom " : ""}${x.abaixo ? "baixo" : ""}">${x.trab}</td>`).join("")}${"<td class='col-h'></td>".repeat(p.semanas)}</tr>`;
+    const hs = semanasVis.map((w) => { const h = an.horas[pe.id][w]; return `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`; }).join("");
+    const sub = [alm !== "—" ? `alm ${alm}` : "", porFuncao && pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
+    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(sub)}</small></td>${cels}${hs}</tr>`;
+  };
 
-  const pesos = [1, 2, 3, 4, 5, 6].map((dw) => `<label>${M.DOW[dw]} <select data-bind="pesos.${dw}" data-tipo="num">${opcoes([[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]], p.pesos[dw])}</select></label>`).join("");
+  // agrupa por turno; a linha do turno mostra quantos dele trabalham em cada dia
+  let corpo = "";
+  for (const t of p.turnos) {
+    const grupo = pessoas.filter((pe) => (M.turnoDe(p, pe)?.id) === t.id);
+    if (!grupo.length) continue;
+    const contagem = dias.map((d) => `<td class="${d.dow === 0 ? "ini-sem dom" : ""}">${grupo.filter((pe) => M.trabalha(M.valor(p, pe.id, d))).length}</td>`).join("");
+    corpo += `<tr class="grupo"><td class="col-nome"><b>${esc(t.nome)}</b><small>${t.entrada}–${M.fmtHM(M.saidaTurno(t))} · ${grupo.length} pessoa(s)</small></td>${contagem}<td class="col-h" colspan="${semanasVis.length}"></td></tr>`;
+    corpo += grupo.map(linhaPessoa).join("");
+  }
+  const totalDias = an.porDia.filter((x) => semanasVis.includes(x.semana));
+  const total = `<tr class="total"><td class="col-nome"><b>Trabalhando no dia</b></td>${totalDias.map((x) => `<td class="${x.dow === 0 ? "ini-sem dom " : ""}${x.abaixo ? "baixo" : ""}" title="${x.abaixo ? `${x.abaixo} faixa(s) de 15 min abaixo do mínimo` : "cobertura ok"}">${x.trab}</td>`).join("")}<td class="col-h" colspan="${semanasVis.length}"></td></tr>`;
 
-  return `<section class="cartao">
-    <div class="cartao-cab">
-      <div><h2>Escala de ${M.dataCurta(M.lerISO(p.inicio))}/${M.lerISO(p.inicio).getUTCFullYear()} a ${M.dataBR(fim)}</h2>
-        <p class="sub">As folgas vão para os dias de menos movimento (ajuste o peso dos dias logo abaixo). Quem trabalha no domingo folga 2 dias na semana; o domingo é em rodízio. Clique numa célula para trocar (T → F → X). A última linha mostra quantas pessoas trabalham em cada dia.</p></div>
-      <div class="ferramentas nao-imprime">
+  return `<section class="cartao cartao-escala">
+    <div class="barra-ferramentas nao-imprime">
+      <div class="grupo-ferr">
         <label class="campo"><span>Início (domingo)</span><input type="date" class="ent" value="${p.inicio}" data-acao-change="inicio"></label>
         <label class="campo"><span>Semanas</span><select class="ent" data-acao-change="semanas">${opcoes([1, 2, 3, 4, 5, 6, 7, 8].map((x) => [x, x]), p.semanas)}</select></label>
-        <button class="btn btn-primario" data-acao="redistribuir">Redistribuir folgas automaticamente</button>
-        ${totTravas ? `<button class="btn btn-borda" data-acao="destravar" title="Remove os ajustes feitos à mão">Desfazer ajustes manuais (${totTravas})</button>` : ""}
-        <button class="btn btn-borda" data-acao="csv">Baixar planilha</button>
+        <label class="campo"><span>Mostrar</span><select class="ent" data-acao-change="ver-semana">${opcoes([["todas", "Todas as semanas"], ...[...Array(p.semanas).keys()].map((w) => [w, `Semana ${w + 1}`])], est.verSemana)}</select></label>
+      </div>
+      <div class="grupo-ferr">
+        <button class="btn btn-primario" data-acao="redistribuir">Redistribuir folgas</button>
+        <button class="btn btn-borda" data-acao="escalonar" title="Espalha os almoços de quem é do mesmo turno para não abrir buraco">Escalonar almoços</button>
+        ${totTravas ? `<button class="btn btn-borda" data-acao="destravar" title="Remove os ajustes feitos à mão">Desfazer ajustes (${totTravas})</button>` : ""}
+        <button class="btn btn-borda" data-acao="csv">Planilha</button>
       </div>
     </div>
-    <div class="pesos nao-imprime"><span>Movimento do dia (1 = fraco · 5 = forte):</span>${pesos}</div>
-    <div class="rolagem" data-rolagem="escala"><table class="escala"><thead>${cabSem}${cabDia}</thead><tbody>${linhas}${total}</tbody></table></div>
-    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>trabalho no domingo (meio período)</span><span><i class="cel X">X</i>ausente (férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão (a redistribuição não mexe)</span></div>
+    <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (vazio = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
+    <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${corpo}${total}</tbody></table></div>
+    <div class="legenda"><span><i class="cel T"></i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (meio período)</span><span><i class="cel X">X</i>ausente (férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas em laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
   </section>`;
 }
 
@@ -688,25 +757,30 @@ function htmlMapa(p, an) {
   const { ini, n } = an.jan;
   let cab = "<tr><th class='dia'></th>";
   for (let k = 0; k < n; k++) { const t = ini + k * M.PASSO; cab += `<th>${t % 60 === 0 ? `${Math.floor(t / 60)}h` : ""}</th>`; }
-  cab += "</tr>";
+  cab += "<th class='res'>Falta</th></tr>";
+  const linha = (rot, valores, cls) => `<tr class="${cls || ""}"><th class="dia">${rot}</th>${valores}</tr>`;
   const linhas = dias.map((x) => {
-    let tds = "";
+    let tds = "", minRow = "";
     for (let k = 0; k < n; k++) {
       const t = ini + k * M.PASSO, c = x.cov[k], m = x.min[k];
       const cls = m === 0 && c === 0 ? "vazio" : c < m ? "falta" : c === m ? "ok" : "sobra";
       tds += `<td class="${cls}${t % 60 === 0 ? " hora" : ""}" title="${M.DOW[x.dow]} ${M.fmtHM(t)}: ${c} no posto · mínimo ${m}">${cls === "vazio" ? "" : c}</td>`;
+      minRow += `<td class="minimo${t % 60 === 0 ? " hora" : ""}">${m || ""}</td>`;
     }
-    return `<tr><th class="dia">${M.DOW[x.dow]} ${x.d.getUTCDate()}</th>${tds}</tr>`;
+    return linha(`${M.DOW[x.dow]} ${x.d.getUTCDate()}`, tds + `<td class="res${x.abaixo ? " ruim" : ""}">${x.abaixo ? `${x.abaixo}×15'` : "—"}</td>`)
+      + (est.mostrarMinimo ? linha("mín.", minRow + "<td></td>", "linha-min") : "");
   }).join("");
   const botoes = Array.from({ length: p.semanas }, (_, i) => {
     const ruim = an.porDia.slice(i * 7, i * 7 + 7).some((x) => x.abaixo);
     const a = an.porDia[i * 7].d, b = an.porDia[i * 7 + 6].d;
-    return `<button type="button" data-acao="semana-mapa" data-w="${i}" class="${i === w ? "ativo" : ""}${ruim ? " ruim" : ""}">${M.dataCurta(a)}–${M.dataCurta(b)}</button>`;
+    return `<button type="button" data-acao="semana-mapa" data-w="${i}" class="${i === w ? "ativo" : ""}${ruim ? " ruim" : ""}">S${i + 1} · ${M.dataCurta(a)}–${M.dataCurta(b)}</button>`;
   }).join("");
   return `<section class="cartao">
-    <div class="cartao-cab"><div><h2>Mapa de cobertura</h2><p class="sub">Quantas pessoas estão no posto a cada 15 minutos, descontando o almoço. Vermelho: abaixo do mínimo que você definiu. Verde-claro: exatamente o mínimo. Verde forte: acima.</p></div>
-      <div class="semanas-mapa">${botoes}</div></div>
-    <div class="rolagem" data-rolagem="mapa" style="border:0"><table class="mapa"><thead>${cab}</thead><tbody>${linhas}</tbody></table></div>
+    <div class="cartao-cab"><div><h2>Mapa de cobertura</h2><p class="sub">Pessoas no posto a cada 15 minutos, já descontando o almoço. <span class="lg falta"></span> abaixo do mínimo · <span class="lg ok"></span> no mínimo · <span class="lg sobra"></span> acima.</p></div>
+      <div class="ferr-mapa nao-imprime"><label class="texto-fraco"><input type="checkbox" data-acao-change="mostrar-minimo"${est.mostrarMinimo ? " checked" : ""}> mostrar o mínimo de cada horário</label>
+      <button class="btn btn-peq btn-borda" data-acao="escalonar">Escalonar almoços</button></div></div>
+    <div class="semanas-mapa nao-imprime">${botoes}</div>
+    <div class="rolagem" data-rolagem="mapa" style="border:0;margin-top:12px"><table class="mapa"><thead>${cab}</thead><tbody>${linhas}</tbody></table></div>
   </section>`;
 }
 
@@ -730,6 +804,8 @@ function htmlTurnos(p) {
     <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="add-turno">+ Turno</button></p>
     <div class="linha-config"><b>Domingo:</b> entrada <input type="time" class="ent hora" value="${p.domingo.entrada}" data-bind="domingo.entrada"> saída <input type="time" class="ent hora" value="${p.domingo.saida}" data-bind="domingo.saida"> <span>${M.fmtDur(domH)} no posto</span></div>
     <div class="linha-config"><b>Loja aberta seg a sáb:</b> <input type="time" class="ent hora" value="${p.funcionamento.segsab[0]}" data-bind="funcionamento.segsab.0"> às <input type="time" class="ent hora" value="${p.funcionamento.segsab[1]}" data-bind="funcionamento.segsab.1"></div>
+    <div class="linha-config"><b>Movimento do dia</b> <span class="texto-fraco">(1 = fraco · 5 = forte — a folga vai para os dias mais fracos)</span></div>
+    <div class="pesos">${[1, 2, 3, 4, 5, 6].map((dw) => `<label>${M.DOW[dw]} <select data-bind="pesos.${dw}" data-tipo="num">${opcoes([[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]], p.pesos[dw])}</select></label>`).join("")}</div>
     <div class="linha-config"><b>Loja aberta domingo:</b> <input type="time" class="ent hora" value="${p.funcionamento.dom[0]}" data-bind="funcionamento.dom.0"> às <input type="time" class="ent hora" value="${p.funcionamento.dom[1]}" data-bind="funcionamento.dom.1"></div>
   </section>`;
 }
@@ -757,13 +833,14 @@ function htmlPessoas(p) {
   const optDom = [["rodizio", "Rodízio"], ["nunca", "Nunca"], ["sempre", "Sempre"]];
   const optFolga = [["", "—"], ...[1, 2, 3, 4, 5, 6].map((d) => [d, M.DOW_LONGO[d]])];
   const linhas = p.pessoas.map((pe, i) => {
-    if (pe.fora) return `<tr><td><b>${esc(pe.nome)}</b></td><td><span class="chip fora">fora do quadro do Senior</span></td><td colspan="5" class="texto-fraco">Não entra na escala.</td></tr>`;
+    if (pe.fora) return `<tr><td><b>${esc(pe.nome)}</b></td><td><span class="chip fora">fora do quadro do Senior</span></td><td colspan="6" class="texto-fraco">Não entra na escala.</td></tr>`;
     const chip = (pe.semEscala ? `<span class="chip fora">${esc(pe.semEscala)}</span> ` : "") + (lerChave(est.setor)?.funcao || !pe.funcao ? "" : `<span class="chip">${esc(titulo(pe.funcao))}</span> `) + (pe.origem === "extra" ? `<span class="chip extra">extra</span>` : pe.ferias ? `<span class="chip ferias">${esc(titulo(pe.sit))}</span>` : `<span class="chip">${esc(titulo(pe.sit || "Ativo"))}</span>`);
     const nome = pe.origem === "extra" ? `<input class="ent nome-in" value="${esc(pe.nome)}" data-bind="pessoas.${i}.nome">` : `<b>${esc(pe.nome)}</b>`;
     return `<tr>
       <td>${nome}</td>
       <td>${chip}<div class="texto-fraco mono" title="Horário no Senior">${esc(pe.senior || "")}</div></td>
       <td><select class="ent" data-bind="pessoas.${i}.turno">${opcoes(optT, pe.turno)}</select></td>
+      <td>${almocoSel(p, pe, i)}</td>
       <td><select class="ent" data-bind="pessoas.${i}.domingo">${opcoes(optDom, pe.domingo)}</select></td>
       <td><select class="ent" data-bind="pessoas.${i}.folgaFixa" data-tipo="numnull">${opcoes(optFolga, pe.folgaFixa ?? "")}</select></td>
       <td><label class="texto-fraco"><input type="checkbox" ${pe.ativo !== false ? "checked" : ""} data-bind="pessoas.${i}.ativo" data-tipo="bool"> na escala</label></td>
@@ -772,8 +849,21 @@ function htmlPessoas(p) {
   return `<section class="cartao">
     <div class="cartao-cab"><div><h2>Pessoas e regras</h2><p class="sub">Vêm do Quadro de Lotação (quadro do Senior: ${esc(infoSetor(est.setor).rotulo)}, ativos da loja). Escolha o turno de cada uma, a regra do domingo e, se tiver, a folga fixa. Pessoa extra = coringa, vaga em aberto ou contratação nova.</p></div>
       <div class="ferramentas nao-imprime"><button class="btn btn-borda" data-acao="recarregar" title="Busca de novo o quadro do QL">Atualizar do QL</button><button class="btn btn-borda" data-acao="add-extra">+ Pessoa extra</button></div></div>
-    <div class="rolagem-conf"><table class="conf"><thead><tr><th>Nome</th><th>Situação · horário Senior</th><th>Turno</th><th>Domingo</th><th>Folga fixa</th><th></th><th></th></tr></thead><tbody>${linhas || `<tr><td colspan="7" class="texto-fraco">Ninguém neste setor.</td></tr>`}</tbody></table></div>
+    <div class="rolagem-conf"><table class="conf"><thead><tr><th>Nome</th><th>Situação · horário Senior</th><th>Turno</th><th>Almoço</th><th>Domingo</th><th>Folga fixa</th><th></th><th></th></tr></thead><tbody>${linhas || `<tr><td colspan="8" class="texto-fraco">Ninguém neste setor.</td></tr>`}</tbody></table></div>
   </section>`;
+}
+
+function almocoSel(p, pe, i) {
+  const t = M.turnoDe(p, pe);
+  if (!t || !t.almocoMin) return `<span class="texto-fraco">—</span>`;
+  const lim = M.limitesAlmoco(t);
+  const ops = [];
+  for (let aj = -90; aj <= 90; aj += 15) {
+    const ini = M.hm(t.almoco) + aj;
+    if ((ini < lim.min || ini > lim.max) && aj !== (+pe.almocoAjuste || 0)) continue;
+    ops.push([aj, `${M.fmtHM(ini)}${aj ? ` (${aj > 0 ? "+" : ""}${aj}')` : " (do turno)"}`]);
+  }
+  return `<select class="ent" data-bind="pessoas.${i}.almocoAjuste" data-tipo="int">${opcoes(ops, +pe.almocoAjuste || 0)}</select>`;
 }
 
 function htmlBarra() {
@@ -823,6 +913,15 @@ document.addEventListener("click", (ev) => {
   if (a === "add-extra") return addExtra();
   if (a === "rm-extra") return removerExtra(el.dataset.id);
   if (a === "salvar") return salvar();
+  if (a === "visao") { est.aba = el.dataset.v; gravarLocal("escala_web_aba", est.aba); render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" }); }
+  if (a === "ir-problema") { est.aba = "cobertura"; est.semanaMapa = +el.dataset.w || 0; render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" }); }
+  if (a === "escalonar") return escalonarAgora();
+  if (a === "passo") {
+    const alvo = el.dataset.alvo;
+    if (alvo === "auto") return redistribuirAgora();
+    if (alvo === "almoco") return escalonarAgora();
+    est.aba = alvo; render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" });
+  }
 });
 
 function salvarRascunhosTodos() {
@@ -846,6 +945,8 @@ document.addEventListener("change", (ev) => {
     M.redistribuir(plano(), ativos(plano()));
     return alterou();
   }
+  if (el.dataset.acaoChange === "ver-semana") { est.verSemana = el.value === "todas" ? "todas" : +el.value; return render(); }
+  if (el.dataset.acaoChange === "mostrar-minimo") { est.mostrarMinimo = el.checked; return render(); }
   if (el.dataset.acaoChange === "semanas") {
     plano().semanas = +el.value;
     M.redistribuir(plano(), ativos(plano()));
@@ -857,6 +958,7 @@ document.addEventListener("change", (ev) => {
   const tipo = el.dataset.tipo;
   if (tipo === "num") v = Math.max(0, +v || 0);
   if (tipo === "numnull") v = v === "" ? null : +v;
+  if (tipo === "int") v = Math.round(+v || 0);
   if (tipo === "bool") v = !!el.checked;
   if (el.type === "time" && !v) return render();
   setCaminho(plano(), bind, v);

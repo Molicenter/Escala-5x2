@@ -87,9 +87,16 @@
     const t = turnoDe(p, pessoa);
     if (!t) return [];
     const e = hm(t.entrada), fim = saidaTurno(t);
-    const a = hm(t.almoco), b = a + t.almocoMin;
+    const a = almocoDe(t, pessoa), b = a + t.almocoMin;
     if (t.almocoMin > 0 && a > e && b < fim) return [[e, a], [b, fim]];
     return [[e, fim]];
+  }
+  // almoço da pessoa = almoço do turno + ajuste individual (para escalonar quem é do mesmo turno)
+  function almocoDe(t, pessoa) { return hm(t.almoco) + (+pessoa?.almocoAjuste || 0); }
+  function limitesAlmoco(t) {
+    // pelo menos 2h trabalhadas antes e 1h depois do almoço
+    const e = hm(t.entrada), fim = saidaTurno(t);
+    return { min: e + 120, max: fim - 60 - t.almocoMin };
   }
   function minutosTrabalho(p, pessoa, dow, valor) {
     if (valor === "D" && dow === 0) return Math.max(0, hm(p.domingo.saida) - hm(p.domingo.entrada));
@@ -167,7 +174,7 @@
         if (!ruim && ini != null) { faixas.push(`${fmtHM(jan.ini + ini * PASSO)}–${fmtHM(jan.ini + k * PASSO)}`); ini = null; }
       }
       const pior = Math.max(...ruins.map((x) => Math.max(...x.min.map((m, k) => m - x.cov[k]))));
-      problemas.push({ dow, semanas: ruins.length, total: ds.length, faixas, pior, slots: ruins.reduce((s, x) => s + x.abaixo, 0) });
+      problemas.push({ dow, primeiraSemana: r.semana, semanas: ruins.length, total: ds.length, faixas, pior, slots: ruins.reduce((s, x) => s + x.abaixo, 0) });
     }
 
     // horas por semana, folgas e regras por pessoa
@@ -307,6 +314,40 @@
     for (const pid in p.grade) for (const k in p.grade[pid]) if (!validas.has(k) && !p.travas?.[pid]?.[k]) delete p.grade[pid][k];
   }
 
+  // ---------- escalonar almoços ----------
+  // Para cada pessoa, testa o almoço do turno de 1h antes até 1h depois (de 15 em 15 min) e fica com
+  // o que deixa menos gente abaixo do mínimo (falta maior pesa mais). Empate: o mais perto do horário do turno.
+  function custoCobertura(p, pessoas) {
+    const an = analisar(p, pessoas);
+    let c = 0;
+    for (const x of an.porDia) for (let k = 0; k < x.cov.length; k++) { const f = x.min[k] - x.cov[k]; if (f > 0) c += f * f; }
+    return c;
+  }
+  function escalonarAlmocos(p, pessoas) {
+    const antes = custoCobertura(p, pessoas);
+    // simulação com 2 semanas basta (o padrão se repete) e deixa o cálculo rápido
+    const q = { ...p, semanas: Math.min(p.semanas, 2) };
+    const ordem = [...pessoas].sort((a, b) => String(a.turno).localeCompare(String(b.turno)));
+    ordem.forEach((pe) => { pe.almocoAjuste = 0; });
+    for (let rodada = 0; rodada < 2; rodada++) {
+      for (const pe of ordem) {
+        const t = turnoDe(p, pe);
+        if (!t || !t.almocoMin) continue;
+        const lim = limitesAlmoco(t);
+        let melhor = pe.almocoAjuste || 0, melhorC = Infinity;
+        for (let aj = -60; aj <= 60; aj += 15) {
+          const ini = hm(t.almoco) + aj;
+          if (ini < lim.min || ini > lim.max) continue;
+          pe.almocoAjuste = aj;
+          const c = custoCobertura(q, pessoas) + Math.abs(aj) / 1000;
+          if (c < melhorC) { melhorC = c; melhor = aj; }
+        }
+        pe.almocoAjuste = melhor;
+      }
+    }
+    return { antes, depois: custoCobertura(p, pessoas) };
+  }
+
   // ---------- horário do Senior → entrada / almoço ----------
   // "SG-SB 12:00-15:00 17:00-21:20" ou "SEG/SB 13:10 15:00 16:50 22:20"
   // "SG-SX 7:00-17:00 SB 7:00-11:00" (seg a sex corrido + sábado curto) → usa o horário de seg a sex,
@@ -328,7 +369,7 @@
   window.Motor = {
     DOW, DOW_LONGO, PASSO, GRUPOS_DIAS, CENARIOS,
     hm, fmtHM, fmtDur, lerISO, iso, somaDias, dataCurta, dataBR, domingoDe,
-    datasDoPlano, turnoDe, saidaTurno, intervalos, minutosTrabalho, valor, trabalha,
+    datasDoPlano, turnoDe, saidaTurno, intervalos, almocoDe, limitesAlmoco, escalonarAlmocos, minutosTrabalho, valor, trabalha,
     janela, minimoNoSlot, analisar, redistribuir, lerEscalaSenior,
   };
 })();
