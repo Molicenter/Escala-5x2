@@ -13,7 +13,7 @@ const num1 = (x) => (Math.round(x * 10) / 10).toFixed(1).replace(".", ",");
 const titulo = (s) => String(s ?? "").toLowerCase().replace(/(^|[^\p{L}])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
 const semAcento = (s) => String(s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "");
 const normalizar = (s) => semAcento(String(s ?? "").trim().toUpperCase()).split(/\s+/).filter(Boolean).join(" ");
-const nomeLoja = (n) => `Loja ${p2(n)}`;
+const nomeLoja = (n) => (+n === 30 ? "Loja 30 · CD" : `Loja ${p2(n)}`);
 const clonar = (o) => JSON.parse(JSON.stringify(o));
 
 // Setores = departamentos do quadro do Senior (Banco QL). Chave de cada plano:
@@ -54,20 +54,22 @@ function carregando(sim) { $("#carregando").hidden = !sim; }
 function lerLocal(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function gravarLocal(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
 
-// ---------- sessão (a MESMA do QL: quem já entrou no QL neste navegador entra direto aqui) ----------
-const CHAVE_SESSAO = "ql_web_sessao";
+// ---------- sessão (logins próprios da escala: Analista, Departamento Pessoal e Loja 01 a 08) ----------
+const CHAVE_SESSAO = "escala_web_sessao";
+const ROTULO_PERFIL = { analista: "Analista · todas as lojas e CD", dp: "Departamento Pessoal · todas as lojas e CD", loja: "Login da loja" };
 let sessao = (() => { try { return JSON.parse(lerLocal(CHAVE_SESSAO)) || null; } catch { return null; } })();
 
 const MENSAGENS = {
   SENHA_INCORRETA: "Usuário ou senha incorretos. Tente de novo.",
-  SENHA_NAO_CONFIGURADA: "A senha deste usuário ainda não foi cadastrada no QL.",
+  SENHA_NAO_CONFIGURADA: "A senha deste usuário ainda não foi cadastrada (falta rodar o SQL das senhas).",
+  USUARIO_INVALIDO: "Escolha um usuário da lista.",
   MUITAS_TENTATIVAS: "Muitas tentativas erradas. Espere 10 minutos e tente de novo.",
   SESSAO_INVALIDA: "Sua sessão expirou. Entre de novo.",
   SEM_PERMISSAO: "Seu login não tem acesso a esta loja.",
   ESCOPO_INVALIDO: "Escolha a loja.",
   SETOR_INVALIDO: "Setor inválido.",
   DADOS_GRANDES: "A escala ficou grande demais para gravar. Diminua o número de semanas.",
-  "Could not find the function": "O banco ainda não tem as funções da escala (falta rodar o SQL 01_escala_web.sql).",
+  "Could not find the function": "O banco ainda não tem as funções da escala (falta rodar os SQL 01 e 02 da escala).",
 };
 function traduzir(msg) {
   const m = String(msg);
@@ -108,8 +110,8 @@ async function telaLogin() {
   const sel = $("#login-usuario");
   sel.innerHTML = '<option value="">Carregando…</option>';
   try {
-    const lista = await rpc("ql_web_lista_usuarios");
-    const ultimo = lerLocal("ql_web_ultimo_usuario");
+    const lista = await rpc("escala_web_lista_usuarios");
+    const ultimo = lerLocal("escala_web_ultimo_usuario");
     sel.innerHTML = '<option value="">Selecione o usuário…</option>' +
       lista.map((u) => `<option${u === ultimo ? " selected" : ""}>${esc(u)}</option>`).join("");
   } catch (e) {
@@ -129,9 +131,9 @@ $("#form-login").addEventListener("submit", async (ev) => {
   const btn = $("#btn-entrar");
   btn.disabled = true; btn.textContent = "Entrando…";
   try {
-    sessao = await rpc("ql_web_login", { p_email: email, p_senha: senha });
+    sessao = await rpc("escala_web_login", { p_usuario: email, p_senha: senha });
     gravarLocal(CHAVE_SESSAO, JSON.stringify(sessao));
-    gravarLocal("ql_web_ultimo_usuario", email);
+    gravarLocal("escala_web_ultimo_usuario", email);
     $("#login-senha").value = "";
     iniciarApp();
   } catch (e) {
@@ -146,7 +148,7 @@ function sair(silencioso) {
   const tok = sessao?.token;
   sessao = null; est.dados = null;
   gravarLocal(CHAVE_SESSAO, null);
-  if (tok && !silencioso) rpc("ql_web_sair", { p_token: tok }).catch(() => {});
+  if (tok && !silencioso) rpc("escala_web_sair", { p_token: tok }).catch(() => {});
   telaLogin();
 }
 
@@ -541,7 +543,7 @@ function htmlTopo(p) {
     <div class="topo-linha">
       <div class="topo-titulo"><img src="logo.png" alt=""><h1>Escala 5x2 <span class="ponto">·</span> ${seletor}</h1></div>
       <div class="topo-conta">
-        <div class="quem"><strong>${esc(sessao.email)}</strong>${esc(sessao.perfil || "")}</div>
+        <div class="quem"><strong>${esc(sessao.email)}</strong>${esc(ROTULO_PERFIL[sessao.perfil] || "")}</div>
         <button class="btn btn-peq btn-vidro" data-acao="imprimir" title="Imprimir ou salvar em PDF">Imprimir / PDF</button>
         <button class="btn btn-peq btn-vidro" data-acao="tema" title="Tema claro/escuro">◐</button>
         <button class="btn btn-peq btn-vidro" data-acao="sair">Sair</button>

@@ -3,7 +3,7 @@
 Simulador e controle da escala 5x2 de todos os setores das 8 lojas.
 App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`, no mesmo modelo do QL web.
 
-- **Login:** o mesmo do Quadro de Lotação (usuários e senhas do QL). Quem já entrou no QL neste navegador entra direto. Login de loja vê só a própria loja.
+- **Login:** próprio da escala (não usa mais os usuários do QL): Analista, Departamento Pessoal, Loja 01 a Loja 08 e Loja 30 (CD). Analista e DP veem as 8 lojas e o CD; cada loja vê só a sua. As senhas são cadastradas por um SQL separado que **não** fica neste repositório.
 - **Colaboradores:** vêm do mesmo Banco QL.xlsx importado no QL (`ql_web_quadro_senior`), todos os departamentos, sem os demitidos. A coluna "Descrição (Escala)" é o horário atual de cada pessoa e vira a sugestão de turno. Cada departamento pode ser montado inteiro ou por função. ART 62 CLT e aprendiz/curso ficam fora da escala por padrão. Atualizou o Excel no QL → clique em "Atualizar do QL" aqui.
 - **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
@@ -18,7 +18,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - Imprimir / PDF e baixar planilha (CSV que abre no Excel)
 
 ## Publicar
-1. Rodar no Supabase (SQL Editor) o arquivo `sql/01_escala_web.sql` — só cria tabelas e funções novas com prefixo `escala_`, não mexe nas do QL.
+1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql` e o arquivo de senhas (02b, guardado fora do GitHub). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
 2. Subir a pasta `docs/` e o `sql/` neste repositório (pode apagar o `index.html`, `app.js` e `style.css` antigos da raiz).
 3. Settings → Pages → Branch `main`, pasta **/docs** → Save.
 
