@@ -581,7 +581,11 @@ function render() {
 
 function htmlTopo(p) {
   const lojas = est.dados.lojas || [];
-  const seletor = sessao.loja_fixa != null || lojas.length <= 1
+  const modoOrc = est.modo === "orcado" && ORC.dados;
+  const optsOrc = modoOrc ? opcoesEscopoOrc() : [];
+  const seletor = modoOrc
+    ? (optsOrc.length > 1 ? `<select class="sel-loja" data-acao-change="orc-escopo" aria-label="Loja ou total">${opcoes(optsOrc, ORC.escopo)}</select>` : `<span class="loja-fixa">${esc(nomeEscopoOrc(ORC.escopo ?? est.loja))}</span>`)
+    : sessao.loja_fixa != null || lojas.length <= 1
     ? `<span class="loja-fixa">${nomeLoja(est.loja)}</span>`
     : `<select class="sel-loja" data-acao-change="loja" aria-label="Loja">${opcoes(lojas.map((l) => [l, nomeLoja(l)]), est.loja)}</select>`;
   const orc = est.modo === "orcado";
@@ -964,10 +968,19 @@ document.addEventListener("change", (ev) => {
     const nova = +el.value;
     if (algumSujo() && !confirm("Há alterações não salvas nesta loja. Trocar mesmo assim? (elas ficam guardadas neste navegador)")) { el.value = est.loja; return; }
     salvarRascunhosTodos();
-    if (ORC.escopo !== "TL") ORC.escopo = nova;
+    if (!ehTotalOrc(ORC.escopo)) ORC.escopo = nova;
     return carregarLoja(nova);
   }
-  if (el.dataset.acaoChange === "orc-escopo") { ORC.escopo = el.value === "TL" ? "TL" : +el.value; return render(); }
+  if (el.dataset.acaoChange === "orc-escopo") {
+    ORC.escopo = lerEscopoOrc(el.value);
+    // escolheu uma loja: a escala dos setores passa a ser dessa loja também
+    if (!ehTotalOrc(ORC.escopo) && ORC.escopo !== est.loja && (est.dados?.lojas || []).includes(ORC.escopo)) {
+      if (algumSujo() && !confirm("Há alterações não salvas nesta loja. Trocar mesmo assim? (elas ficam guardadas neste navegador)")) return render();
+      salvarRascunhosTodos();
+      return carregarLoja(ORC.escopo);
+    }
+    return render();
+  }
   if (el.dataset.acaoChange === "orc-gestao") { ORC.gestaoFixa = el.checked; gravarLocal("escala_orc_gestao", el.checked ? "1" : "0"); return render(); }
   if (el.dataset.acaoChange === "inicio") {
     const d = M.lerISO(el.value);

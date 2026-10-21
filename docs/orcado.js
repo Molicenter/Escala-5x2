@@ -29,7 +29,7 @@ const lerLocalOrc = (k) => { try { return localStorage.getItem(k); } catch { ret
 const gravarLocalOrc = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 const ORC = {
   dados: null, erro: null, carregando: false,
-  escopo: null,                                  // número da loja ou "TL" (Total Lojas 01 a 08)
+  escopo: null,                                  // número da loja, "TL" (Lojas TT: 01 a 08) ou "TLCD" (Lojas c/ CD: 01 a 08 + 30)
   base: lerLocalOrc("escala_orc_base") || "orcado", // "orcado" ou "real"
   gestaoFixa: lerLocalOrc("escala_orc_gestao") !== "0",
   cenario: +lerLocalOrc("escala_orc_cenario") || 42,
@@ -48,7 +48,28 @@ function chaveOrcDoQuadro(dept, funcao) {
 }
 const chaveOrc = (o) => normalizar(o.d) + "|" + chaveFuncao(o.f);
 const ehAprendiz = (f) => /APRENDIZ/.test(normalizar(f));
-const ehGestao = (f) => /^(GERENTE|SUBGERENTE|ENCARREGAD)/.test(normalizar(f));
+const ehGestao = (f) => /^(GERENTE|SUBGERENTE|ENCARREGAD|SUPERVISOR)/.test(normalizar(f));
+// totalizadores do seletor de loja
+const TOTAIS_ORC = {
+  TL: { nome: "Lojas TT", longo: "Lojas TT (01 a 08)", lojas: [1, 2, 3, 4, 5, 6, 7, 8] },
+  TLCD: { nome: "Lojas c/ CD", longo: "Lojas c/ CD (01 a 08 + 30)", lojas: [1, 2, 3, 4, 5, 6, 7, 8, 30] },
+};
+const ehTotalOrc = (e) => e === "TL" || e === "TLCD";
+const lerEscopoOrc = (v) => (ehTotalOrc(v) ? v : +v);
+const temOrcado = (l) => (ORC.dados?.orcado || []).some((o) => o.l === l);
+function lojasDoEscopo(e) {
+  const disp = ORC.dados?.lojas || [];
+  const temAlgo = (l) => temOrcado(l) || (ORC.dados?.real || []).some((r) => r.l === l);
+  return ehTotalOrc(e) ? TOTAIS_ORC[e].lojas.filter((l) => disp.includes(l) && temAlgo(l)) : [+e];
+}
+// opções do seletor (topo) na visão do orçado: totalizadores + lojas
+function opcoesEscopoOrc() {
+  const disp = ORC.dados?.lojas || [];
+  const tot = Object.entries(TOTAIS_ORC).filter(([, t]) => t.lojas.filter((l) => disp.includes(l)).length > 1
+    && !(t.lojas.includes(30) && !disp.includes(30)) && t.lojas.some(temOrcado)).map(([k, t]) => [k, t.nome]);
+  return [...tot, ...disp.map((l) => [l, nomeLoja(l)])];
+}
+const nomeEscopoOrc = (e) => (ehTotalOrc(e) ? TOTAIS_ORC[e].nome : nomeLoja(e));
 const fmt1 = (x) => (Math.round(x * 10) / 10).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const fmtMoedaOrc = (v) => (v == null || v === "" || isNaN(+v) ? "-" : (+v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
 const fmtIntOrc = (v) => (v == null || v === "" || isNaN(+v) ? "-" : Math.round(+v).toLocaleString("pt-BR"));
@@ -81,17 +102,18 @@ function realPorLoja(l) {
 
 // conta de uma loja num cenário: departamentos com as funções, já arredondados
 function calcLoja(l, horas) {
-  const itens = (ORC.dados?.orcado || []).filter((o) => o.l === l)
-    .sort((a, b) => (a.od ?? 0) - (b.od ?? 0) || (a.of ?? 0) - (b.of ?? 0));
   const real = realPorLoja(l);
+  const semOrc = !temOrcado(l);
+  const itens = semOrc ? itensDoReal(l) : (ORC.dados?.orcado || []).filter((o) => o.l === l)
+    .sort((a, b) => (a.od ?? 0) - (b.od ?? 0) || (a.of ?? 0) - (b.of ?? 0));
   const usados = new Set();
   const depts = new Map();
   for (const o of itens) {
     const k = chaveOrc(o);
     usados.add(k);
-    const fixa = ehAprendiz(o.f) || (ORC.gestaoFixa && ehGestao(o.f));
+    const fixa = ehAprendiz(o.f) || (ORC.gestaoFixa && (ehGestao(o.f) || normalizar(o.d) === "SOCIO"));
     const q = Number(o.q || 0), r = real.get(k) || 0;
-    const base = ORC.base === "real" ? r : q;
+    const base = ORC.base === "real" || semOrc ? r : q;
     const exato = fixa ? base : (base * HORAS_HOJE) / horas;
     if (!depts.has(o.d)) depts.set(o.d, { d: o.d, od: o.od ?? 0, funcs: [] });
     depts.get(o.d).funcs.push({ f: o.f, of: o.of ?? 0, q, r, base, exato, fixa, conta: o.c !== false });
@@ -100,7 +122,22 @@ function calcLoja(l, horas) {
   // gente do quadro em função que não existe no orçado (ex.: nome diferente no Senior)
   let foraOrc = 0;
   for (const [k, n] of real) if (!usados.has(k)) foraOrc += n;
-  return { depts: lista, foraOrc };
+  return { depts: lista, foraOrc, semOrc };
+}
+// loja sem orçado (CD): monta as "funções" a partir do quadro real, na ordem dos departamentos das lojas
+function itensDoReal(l) {
+  const ordem = new Map();
+  for (const o of ORC.dados?.orcado || []) if (!ordem.has(normalizar(o.d))) ordem.set(normalizar(o.d), o.od ?? 0);
+  const m = new Map();
+  for (const r of ORC.dados?.real || []) {
+    if (r.l !== l) continue;
+    const k = chaveOrcDoQuadro(r.d, r.f);
+    if (m.has(k)) continue;
+    const v = DE_PARA_DEPT_ORC[normalizar(r.d)];
+    const d = Array.isArray(v) ? v[0] : v || r.d;
+    m.set(k, { l, d, f: Array.isArray(v) ? titulo(v[1]) : titulo(r.f), q: 0, c: !ehAprendiz(r.f), od: ordem.get(normalizar(d)) ?? 50, of: 0 });
+  }
+  return [...m.values()].sort((a, b) => a.od - b.od || a.d.localeCompare(b.d) || a.f.localeCompare(b.f));
 }
 function fecharDept(dp, horas) {
   const conta = dp.funcs.filter((f) => f.conta);
@@ -120,32 +157,36 @@ function fecharDept(dp, horas) {
 
 // junta várias lojas (Total Lojas): soma departamento a departamento
 function calcEscopo(escopo, horas) {
-  const lojas = escopo === "TL" ? (ORC.dados?.lojas || []) : [+escopo];
+  const lojas = lojasDoEscopo(escopo);
   const m = new Map();
-  let foraOrc = 0;
+  let foraOrc = 0, rOrc = 0;
+  const semOrc = [];
   for (const l of lojas) {
     const c = calcLoja(l, horas);
     foraOrc += c.foraOrc;
+    if (c.semOrc) semOrc.push(l); else rOrc += c.depts.reduce((s, x) => s + x.r, 0);
     for (const dp of c.depts) {
-      const x = m.get(dp.d) || { d: dp.d, od: dp.od, funcs: new Map(), q: 0, r: 0, base: 0, exato: 0, precisa: 0, horasCobrir: 0 };
+      const kd = normalizar(dp.d);
+      const x = m.get(kd) || { d: dp.d, od: dp.od, funcs: new Map(), q: 0, r: 0, base: 0, exato: 0, precisa: 0, horasCobrir: 0 };
       for (const k of ["q", "r", "base", "exato", "precisa", "horasCobrir"]) x[k] += dp[k];
       x.od = Math.min(x.od, dp.od);
       for (const f of dp.funcs) {
-        const y = x.funcs.get(f.f) || { f: f.f, of: f.of, q: 0, r: 0, base: 0, exato: 0, fixa: f.fixa, conta: f.conta };
+        const kf = chaveFuncao(f.f);
+        const y = x.funcs.get(kf) || { f: f.f, of: f.of, q: 0, r: 0, base: 0, exato: 0, fixa: f.fixa, conta: f.conta };
         y.q += f.q; y.r += f.r; y.base += f.base; y.exato += f.exato; y.of = Math.min(y.of, f.of);
-        x.funcs.set(f.f, y);
+        x.funcs.set(kf, y);
       }
-      m.set(dp.d, x);
+      m.set(kd, x);
     }
   }
   const depts = [...m.values()].map((x) => ({ ...x, funcs: [...x.funcs.values()].sort((a, b) => a.of - b.of) })).sort((a, b) => a.od - b.od);
   const tot = (k) => depts.reduce((s, x) => s + x[k], 0);
-  return { lojas, depts, foraOrc, q: tot("q"), r: tot("r"), base: tot("base"), exato: tot("exato"), precisa: tot("precisa"), horasCobrir: tot("horasCobrir") };
+  return { lojas, depts, foraOrc, semOrc, rOrc, q: tot("q"), r: tot("r"), base: tot("base"), exato: tot("exato"), precisa: tot("precisa"), horasCobrir: tot("horasCobrir") };
 }
 
 function paramsEscopo(escopo) {
   const ps = (ORC.dados?.parametros || []);
-  if (escopo !== "TL") return ps.find((p) => p.l === +escopo) || {};
+  if (!ehTotalOrc(escopo)) return ps.find((p) => p.l === +escopo) || {};
   const soma = (k) => (ps.length ? ps.reduce((s, p) => s + Number(p[k] || 0), 0) : null);
   return { venda: soma("venda"), media_6_meses: soma("media_6_meses"), proposta_quant: soma("proposta_quant"),
     venda_por_funcionario: ps.length ? ps.reduce((s, p) => s + Number(p.venda_por_funcionario || 0), 0) / ps.length : null,
@@ -159,22 +200,18 @@ function htmlOrcado() {
   if (ORC.erro) return `<section class="cartao"><p class="erro">${esc(ORC.erro)}</p><p><button class="btn btn-borda" data-acao="orc-recarregar">Tentar de novo</button></p></section>`;
   if (!ORC.dados) { carregarOrcado(); return `<section class="cartao"><p class="texto-fraco">Carregando o QL Orçado…</p></section>`; }
   const lojas = ORC.dados.lojas || [];
-  const temOrc = (l) => (ORC.dados.orcado || []).some((o) => o.l === l);
-  const lojasOrc = lojas.filter(temOrc);
-  if (!lojasOrc.length) return `<section class="cartao vazio-orc"><h2>QL Orçado</h2><p class="sub">O QL Orçado existe só para as Lojas 01 a 08${sessao.loja_fixa === 30 ? " — o CD não tem orçado cadastrado" : ""}. Os valores são editados no app do QL.</p></section>`;
-  if (ORC.escopo == null || (ORC.escopo !== "TL" && !lojasOrc.includes(+ORC.escopo))) ORC.escopo = lojasOrc.includes(est.loja) ? est.loja : lojasOrc[0];
-  if (ORC.escopo === "TL" && lojasOrc.length < 2) ORC.escopo = lojasOrc[0];
+  if (!lojas.length) return `<section class="cartao vazio-orc"><h2>QL Orçado</h2><p class="sub">Nenhuma loja liberada para este login.</p></section>`;
+  const validos = opcoesEscopoOrc().map(([v]) => String(v));
+  if (ORC.escopo == null || !validos.includes(String(ORC.escopo))) ORC.escopo = lojas.includes(est.loja) ? est.loja : lojas[0];
 
   const H = ORC.cenario;
   const cen = Object.fromEntries([44, 42, 40].map((h) => [h, calcEscopo(ORC.escopo, h)]));
   const c = cen[H];
   const P = paramsEscopo(ORC.escopo);
-  const nomeEsc = ORC.escopo === "TL" ? "Total Lojas (01 a 08)" : nomeLoja(ORC.escopo);
+  const nomeEsc = ehTotalOrc(ORC.escopo) ? TOTAIS_ORC[ORC.escopo].longo : nomeLoja(ORC.escopo);
   const rotBase = ORC.base === "real" ? "Real hoje" : "Orçado";
 
-  const optsEsc = [...(lojasOrc.length > 1 ? [["TL", "Total Lojas (01 a 08)"]] : []), ...lojasOrc.map((l) => [l, nomeLoja(l)])];
   const ctrl = `<div class="orc-ctrl nao-imprime">
-    ${optsEsc.length > 1 ? `<label class="campo"><span>Visão</span><select class="ent" data-acao-change="orc-escopo">${opcoes(optsEsc, ORC.escopo)}</select></label>` : ""}
     <div class="campo"><span>Calcular a partir de</span><div class="seg">${[["orcado", "QL Orçado"], ["real", "Real hoje (Ativos + Férias)"]].map(([v, r]) => `<button type="button" data-acao="orc-base" data-v="${v}" class="${ORC.base === v ? "ativo" : ""}">${r}</button>`).join("")}</div></div>
     <label class="orc-chk"><input type="checkbox" data-acao-change="orc-gestao"${ORC.gestaoFixa ? " checked" : ""}> Gerente, subgerente e encarregados ficam iguais <small>(cargo de gestão, sem controle de jornada)</small></label>
   </div>`;
@@ -208,12 +245,13 @@ function htmlOrcado() {
   }).join("");
 
   const add = c.precisa - c.base;
-  const dif = c.r - c.q;
-  const porLoja = ORC.escopo === "TL" ? htmlOrcadoPorLoja(lojasOrc) : "";
+  const dif = c.rOrc - c.q;
+  const porLoja = ehTotalOrc(ORC.escopo) ? htmlOrcadoPorLoja(c.lojas) : "";
+  const avisoCD = c.semOrc.length ? `<div class="orc-aviso">${c.semOrc.map(nomeLoja).join(", ")} não tem QL Orçado: ${c.semOrc.length > 1 ? "entram" : "entra"} pelo <b>real de hoje</b> (Ativos + Férias do Senior) e fica${c.semOrc.length > 1 ? "m" : ""} fora do "Real x Orçado".</div>` : "";
 
   return `<section class="cartao org">
     <div class="org-titulo">QL Orçado x 5x2 — ${esc(nomeEsc)}</div>
-    ${ctrl}
+    ${ctrl}${avisoCD}
     <div class="org-kpis">${kpis.map(([a, b]) => `<div class="org-kpi"><span>${a}</span><b class="num">${esc(b)}</b></div>`).join("")}</div>
     <div class="orc-cens">${cards}</div>
     <p class="orc-explica">Hoje (6x1) todo mundo faz <b>44h</b>. Para a loja continuar com as mesmas horas de trabalho: <b>pessoas × 44 ÷ nova jornada</b>.
@@ -231,12 +269,14 @@ function htmlOrcado() {
 }
 
 function htmlOrcadoPorLoja(lojas) {
-  const linhas = lojas.map((l) => {
-    const r = Object.fromEntries([44, 42, 40].map((h) => [h, calcEscopo(l, h)]));
+  const linha = (rot, r, cls) => {
     const b = r[44].base;
-    return `<tr><td><button type="button" class="link" data-acao="orc-loja" data-l="${l}">${esc(nomeLoja(l))}</button></td><td class="num">${r[44].q}</td><td class="num">${r[44].r}</td><td class="num b">${b}</td>
+    return `<tr class="${cls || ""}"><td>${rot}</td><td class="num">${r[44].semOrc.length === r[44].lojas.length ? "—" : r[44].q}</td><td class="num">${r[44].r}</td><td class="num b">${b}</td>
       ${[44, 42, 40].map((h) => { const a = r[h].precisa - b; return `<td class="num${h === ORC.cenario ? " sel" : ""}">${r[h].precisa}${a > 0 ? ` <em>+${a}</em>` : ""}</td>`; }).join("")}</tr>`;
-  }).join("");
+  };
+  const calc3 = (e) => Object.fromEntries([44, 42, 40].map((h) => [h, calcEscopo(e, h)]));
+  const linhas = lojas.map((l) => linha(`<button type="button" class="link" data-acao="orc-loja" data-l="${l}">${esc(nomeLoja(l))}</button>${temOrcado(l) ? "" : ' <small class="texto-fraco">sem orçado · usa o real</small>'}`, calc3(l))).join("")
+    + linha(`<b>${esc(TOTAIS_ORC[ORC.escopo].nome)}</b>`, calc3(ORC.escopo), "linha-total");
   return `<section class="cartao"><div class="cartao-cab"><div><h2>Por loja</h2><p class="sub">Quanto cada loja precisa em cada jornada, a partir do ${ORC.base === "real" ? "real de hoje" : "QL Orçado"}. Clique na loja para abrir o organograma dela.</p></div></div>
     <div class="rolagem-conf"><table class="conf orc-tab"><thead><tr><th>Loja</th><th>Orçado</th><th>Real</th><th>Base</th><th>44h</th><th>42h</th><th>40h</th></tr></thead><tbody>${linhas}</tbody></table></div></section>`;
 }

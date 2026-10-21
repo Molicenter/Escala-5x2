@@ -3,7 +3,8 @@
 -- Lê (só leitura) o orçado do QL (ql_orcado / ql_parametros_loja) e o
 -- quadro real do Senior (ql_web_quadro_senior: Ativos + Férias, igual ao QL),
 -- para a tela "QL Orçado x 5x2" calcular quantas pessoas faltam em 44h / 42h / 40h.
--- Usa o login próprio da escala: Analista e DP veem as Lojas 01 a 08; login de loja vê só a sua.
+-- Usa o login próprio da escala: Analista e DP veem as Lojas 01 a 08 e a Loja 30 (CD); login de loja vê só a sua.
+-- O CD não tem orçado: a tela usa o real dele (Ativos + Férias) como base.
 -- Rodar DEPOIS do 02. Pode rodar mais de uma vez. Não altera nenhuma tabela.
 -- ============================================================
 create or replace function escala_web_orcado(p_token uuid)
@@ -12,7 +13,7 @@ declare s escala_web_sessoes; v_lojas int[];
 begin
   s := _escala_web_sessao(p_token);
   if s.loja_fixa is not null then v_lojas := array[s.loja_fixa];
-  else v_lojas := array[1,2,3,4,5,6,7,8]; end if;
+  else v_lojas := array[1,2,3,4,5,6,7,8,30]; end if;
 
   return json_build_object(
     'lojas', to_json(v_lojas),

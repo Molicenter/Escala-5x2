@@ -415,3 +415,5 @@ table.conf { width: 100%; border-collapse: collapse; font-size: .86rem; }
   .org-depts { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .orc-cen { break-inside: avoid; }
 }
+.orc-aviso { background: var(--laranja-claro); color: var(--laranja); border-radius: 10px; padding: 8px 12px; font-size: .84rem; margin-bottom: 14px; }
+.orc-tab tr.linha-total td { border-top: 2px solid var(--azul); font-weight: 800; background: var(--azul-claro); }
