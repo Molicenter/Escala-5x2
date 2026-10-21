@@ -32,7 +32,33 @@ begin
                       where loja = any(v_lojas)
                         and coalesce(dept, '') <> '' and dept !~* '^inativo'
                         and (upper(coalesce(situacao, '')) like '%ATIVO%' or situacao ~* 'f[ée]rias')
-                      group by 1, 2, 3) x)
+                      group by 1, 2, 3) x),
+    -- Painel da mudança: situação do quadro, horários de hoje, movimento recente e andamento das escalas
+    'situacao', (select coalesce(json_agg(json_build_object('l', loja, 's', grupo, 'n', n)), '[]'::json)
+               from (select loja,
+                            case when situacao ~* 'f[ée]rias' then 'ferias' when situacao ~* 'afast' then 'afastado'
+                                 when situacao ~* 'demit' then 'demitido' when upper(situacao) like '%ATIVO%' then 'ativo' else 'outro' end grupo,
+                            count(*) n
+                       from ql_web_quadro_senior
+                      where loja = any(v_lojas) and coalesce(dept, '') <> '' and dept !~* '^inativo'
+                      group by 1, 2) x),
+    'horarios', (select coalesce(json_agg(json_build_object('l', loja, 'd', dept, 'f', funcao, 'e', escala, 'n', n)), '[]'::json)
+               from (select loja, dept, funcao, escala, count(*) n
+                       from ql_web_quadro_senior
+                      where loja = any(v_lojas) and coalesce(dept, '') <> '' and dept !~* '^inativo'
+                        and (upper(coalesce(situacao, '')) like '%ATIVO%' or situacao ~* 'f[ée]rias')
+                      group by 1, 2, 3, 4) x),
+    'movimento', (select coalesce(json_agg(json_build_object('l', loja, 'adm90', adm90, 'dem90', dem90)), '[]'::json)
+               from (select loja,
+                            count(*) filter (where admissao >= current_date - 90 and situacao !~* 'demit') adm90,
+                            count(*) filter (where situacao ~* 'demit' and data_afastamento >= current_date - 90) dem90
+                       from ql_web_quadro_senior
+                      where loja = any(v_lojas) and coalesce(dept, '') <> '' and dept !~* '^inativo'
+                      group by 1) x),
+    'planos', (select coalesce(json_agg(json_build_object('l', loja, 'setor', setor, 'em', atualizado_em, 'u', usuario,
+                  'np', coalesce(jsonb_array_length(dados->'pessoas'), 0), 'cen', dados->>'cenario')), '[]'::json)
+               from escala_planos where loja = any(v_lojas)),
+    'senior_em', (select max(em) from ql_web_importacoes)
   );
 end $$;
 

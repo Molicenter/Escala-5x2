@@ -166,7 +166,7 @@ const est = {
   planos: {},             // setor → { p (plano), versao, usuario, sujo }
   semanaMapa: 0,
   aba: lerLocal("escala_web_aba") || "escala",
-  modo: lerLocal("escala_web_modo") === "orcado" ? "orcado" : "escala",   // "escala" (setor) ou "orcado" (QL Orçado x 5x2)
+  modo: ["orcado", "painel"].includes(lerLocal("escala_web_modo")) ? lerLocal("escala_web_modo") : "escala",   // "escala" (setor), "painel" (Painel da mudança) ou "orcado" (QL Orçado x 5x2)
   verSemana: "todas",
   mostrarMinimo: false,
   mostrarTodosAlertas: false,
@@ -393,7 +393,7 @@ function clicarCelula(pid, isoData) {
 }
 
 function trocarModo(m) {
-  est.modo = m === "orcado" ? "orcado" : "escala";
+  est.modo = ["orcado", "painel"].includes(m) ? m : "escala";
   gravarLocal("escala_web_modo", est.modo);
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -552,9 +552,9 @@ function render() {
   $$("[data-rolagem]").forEach((el) => (rol[el.dataset.rolagem] = el.scrollLeft));
 
   const p = plano();
-  if (est.modo === "orcado") {
+  if (est.modo !== "escala") {
     $("#topo").innerHTML = htmlTopo(p);
-    $("#conteudo").innerHTML = htmlAbas() + htmlOrcado();
+    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : htmlOrcado());
     htmlBarra();
     return;
   }
@@ -581,14 +581,14 @@ function render() {
 
 function htmlTopo(p) {
   const lojas = est.dados.lojas || [];
-  const modoOrc = est.modo === "orcado" && ORC.dados;
+  const modoOrc = est.modo !== "escala" && ORC.dados;
   const optsOrc = modoOrc ? opcoesEscopoOrc() : [];
   const seletor = modoOrc
     ? (optsOrc.length > 1 ? `<select class="sel-loja" data-acao-change="orc-escopo" aria-label="Loja ou total">${opcoes(optsOrc, ORC.escopo)}</select>` : `<span class="loja-fixa">${esc(nomeEscopoOrc(ORC.escopo ?? est.loja))}</span>`)
     : sessao.loja_fixa != null || lojas.length <= 1
     ? `<span class="loja-fixa">${nomeLoja(est.loja)}</span>`
     : `<select class="sel-loja" data-acao-change="loja" aria-label="Loja">${opcoes(lojas.map((l) => [l, nomeLoja(l)]), est.loja)}</select>`;
-  const orc = est.modo === "orcado";
+  const orc = est.modo !== "escala";
   const cenAtual = orc ? ORC.cenario : p.cenario;
   const j = M.CENARIOS[cenAtual];
   const dom = `${fmtHoraPilula(p.domingo.entrada)}–${fmtHoraPilula(p.domingo.saida)}`;
@@ -628,8 +628,9 @@ function htmlAbas() {
   const cur = lerChave(est.setor);
   const salvosDept = (dept) => est.dados.planos.some((x) => lerChave(x.setor)?.dept === dept);
   const sujoDept = (dept) => Object.keys(est.planos).some((k) => est.planos[k].sujo && lerChave(k)?.dept === dept);
-  const orc = est.modo === "orcado";
-  const abaOrc = `<button type="button" data-acao="modo" data-v="orcado" class="aba-orc${orc ? " ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/></svg>QL Orçado x 5x2</button>`;
+  const orc = est.modo !== "escala";
+  const abaPainel = `<button type="button" data-acao="modo" data-v="painel" class="aba-orc${est.modo === "painel" ? " ativo" : ""}" title="Resumo para a reunião: quadro, contratações por jornada, horários e andamento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>Painel da mudança</button>`;
+  const abaOrc = abaPainel + `<button type="button" data-acao="modo" data-v="orcado" class="aba-orc${est.modo === "orcado" ? " ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/></svg>QL Orçado x 5x2</button>`;
   const linhaD = abaOrc + est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${!orc && dp.dept === cur.dept ? "ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("");
   const dp = est.estrutura.find((x) => x.dept === cur.dept);
   const chips = dp ? [[chaveSetor(dp.dept), "Todas as funções", dp.n], ...dp.funcoes.map((f) => [chaveSetor(dp.dept, f.f), titulo(f.f), f.n])] : [];
@@ -932,7 +933,7 @@ document.addEventListener("click", (ev) => {
   if (a === "setor") { est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); return abrirSetor(el.dataset.setor); }
   if (a === "dept") { est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); const dpt = el.dataset.dept; return abrirSetor(est.ultimoPorDept[dpt] && lerChave(est.ultimoPorDept[dpt])?.dept === dpt ? est.ultimoPorDept[dpt] : chaveSetor(dpt)); }
   if (a === "cenario") {
-    if (est.modo === "orcado") { ORC.cenario = +el.dataset.h; gravarLocal("escala_orc_cenario", String(ORC.cenario)); return render(); }
+    if (est.modo !== "escala") { ORC.cenario = +el.dataset.h; gravarLocal("escala_orc_cenario", String(ORC.cenario)); return render(); }
     return trocarCenario(+el.dataset.h);
   }
   if (a === "redistribuir") return redistribuirAgora();
@@ -981,6 +982,7 @@ document.addEventListener("change", (ev) => {
     }
     return render();
   }
+  if (el.dataset.acaoChange === "pn-custo") { PN.custo = Math.max(0, +el.value || 0) || null; gravarLocal("escala_pn_custo", PN.custo ? String(PN.custo) : ""); return render(); }
   if (el.dataset.acaoChange === "orc-gestao") { ORC.gestaoFixa = el.checked; gravarLocal("escala_orc_gestao", el.checked ? "1" : "0"); return render(); }
   if (el.dataset.acaoChange === "inicio") {
     const d = M.lerISO(el.value);

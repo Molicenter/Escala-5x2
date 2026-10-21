@@ -8,6 +8,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
 ## O que tem
+- Aba **Painel da mudança** (para reunião): quadro de hoje x orçado x 44h/42h/40h, pontos de atenção gerados dos dados, custo estimado (custo médio digitado), loja a loja, por departamento, horário de hoje (abertura/intermediário/fechamento), situação do quadro (férias, afastados, admitidos/desligados 90 dias) e andamento das escalas. Seletor do topo com Lojas TT e Lojas c/ CD. Imprime em PDF (A4 paisagem).
 - Aba **QL Orçado x 5x2**: o organograma do QL Orçado (mesmos números do QL) com o Real (Ativos + Férias) e quantas pessoas cada jornada pede para manter as mesmas horas de hoje (pessoas × 44 ÷ nova jornada), por loja e Total Lojas. Gestão e aprendiz ficam iguais; arredondamento por departamento. Cada setor da escala mostra uma faixa com o orçado dele.
 - Cenários 44h / 42h / 40h, jornada por turno, saída calculada (entrada + jornada + almoço)
 - Escala de 1 a 8 semanas a partir de um domingo, com T (trabalha), F (folga), D (domingo, meio período) e X (ausente)
