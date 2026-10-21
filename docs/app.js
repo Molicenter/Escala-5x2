@@ -1,6 +1,7 @@
 // ============================================================
 // Escala 5x2 · Molicenter — app web
-// Login do QL · colaboradores da Frente de Caixa vindos do quadro do Senior (QL)
+// Logins próprios da escala · colaboradores de todos os setores vindos do quadro do Senior (QL)
+// Aba "QL Orçado x 5x2" (orcado.js): organograma do orçado e quantas pessoas cada jornada pede.
 // Plano por loja + setor gravado no Supabase pelas funções escala_web_*.
 // ============================================================
 const CFG = window.CONFIG;
@@ -146,7 +147,7 @@ $("#form-login").addEventListener("submit", async (ev) => {
 function sair(silencioso) {
   if (!silencioso && algumSujo() && !confirm("Há alterações não salvas. Sair mesmo assim? (elas ficam guardadas neste navegador)")) return;
   const tok = sessao?.token;
-  sessao = null; est.dados = null;
+  sessao = null; est.dados = null; ORC.dados = null; ORC.erro = null; ORC.escopo = null;
   gravarLocal(CHAVE_SESSAO, null);
   if (tok && !silencioso) rpc("escala_web_sair", { p_token: tok }).catch(() => {});
   telaLogin();
@@ -165,6 +166,7 @@ const est = {
   planos: {},             // setor → { p (plano), versao, usuario, sujo }
   semanaMapa: 0,
   aba: lerLocal("escala_web_aba") || "escala",
+  modo: lerLocal("escala_web_modo") === "orcado" ? "orcado" : "escala",   // "escala" (setor) ou "orcado" (QL Orçado x 5x2)
   verSemana: "todas",
   mostrarMinimo: false,
   mostrarTodosAlertas: false,
@@ -198,6 +200,7 @@ async function carregarLoja(loja) {
     if (!est.setor) throw new Error("Nenhum colaborador desta loja no quadro do QL. Atualize o banco (Excel) no QL primeiro.");
     garantirPlano(est.setor);
     render();
+    carregarOrcado();
   } catch (e) {
     toast(e.message, "erro");
     $("#topo").innerHTML = "";
@@ -389,6 +392,13 @@ function clicarCelula(pid, isoData) {
   alterou();
 }
 
+function trocarModo(m) {
+  est.modo = m === "orcado" ? "orcado" : "escala";
+  gravarLocal("escala_web_modo", est.modo);
+  render();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function redistribuirAgora() {
   const p = plano();
   M.redistribuir(p, ativos(p));
@@ -542,6 +552,12 @@ function render() {
   $$("[data-rolagem]").forEach((el) => (rol[el.dataset.rolagem] = el.scrollLeft));
 
   const p = plano();
+  if (est.modo === "orcado") {
+    $("#topo").innerHTML = htmlTopo(p);
+    $("#conteudo").innerHTML = htmlAbas() + htmlOrcado();
+    htmlBarra();
+    return;
+  }
   const pessoas = ativos(p);
   const an = M.analisar(p, pessoas);
   if (est.semanaMapa >= p.semanas) est.semanaMapa = 0;
@@ -553,7 +569,7 @@ function render() {
     : htmlPessoas(p);
   $("#topo").innerHTML = htmlTopo(p);
   $("#conteudo").innerHTML = [
-    htmlAbas(), htmlAvisoSync(),
+    htmlAbas(), htmlAvisoSync(), htmlFaixaOrcado(p),
     `<div class="painel">${htmlKpis(p, pessoas, an)}${htmlAlertas(p, an)}</div>`,
     htmlRoteiro(p, an),
     `<nav class="visoes nao-imprime">${VISOES.map(([id, r, ic]) => `<button type="button" data-acao="visao" data-v="${id}" class="${id === visao ? "ativo" : ""}">${ic}<span>${r}</span>${id === "cobertura" && an.faixasAbaixo ? `<em>${an.problemas.length}</em>` : ""}</button>`).join("")}</nav>`,
@@ -568,19 +584,21 @@ function htmlTopo(p) {
   const seletor = sessao.loja_fixa != null || lojas.length <= 1
     ? `<span class="loja-fixa">${nomeLoja(est.loja)}</span>`
     : `<select class="sel-loja" data-acao-change="loja" aria-label="Loja">${opcoes(lojas.map((l) => [l, nomeLoja(l)]), est.loja)}</select>`;
-  const j = M.CENARIOS[p.cenario];
+  const orc = est.modo === "orcado";
+  const cenAtual = orc ? ORC.cenario : p.cenario;
+  const j = M.CENARIOS[cenAtual];
   const dom = `${fmtHoraPilula(p.domingo.entrada)}–${fmtHoraPilula(p.domingo.saida)}`;
   return `<div class="topo-in">
     <div class="topo-linha">
       <div class="topo-titulo"><img src="logo.png" alt=""><h1>Escala 5x2 <span class="ponto">·</span> ${seletor}</h1></div>
-      <div class="pilulas">
+      <div class="pilulas">${orc ? `<span class="pilula">QL Orçado <b>x 5x2</b></span><span class="pilula">Hoje <b>6x1 · 44h</b></span><span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>` : `
         <span class="pilula">Folgas <b>2/sem</b></span>
         <span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>
         <span class="pilula">Seg–sáb <b>${fmtHoraPilula(p.funcionamento.segsab[0])}–${fmtHoraPilula(p.funcionamento.segsab[1])}</b></span>
-        <span class="pilula">Dom <b>${dom}</b></span>
+        <span class="pilula">Dom <b>${dom}</b></span>`}
       </div>
       <div class="topo-conta">
-        <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${p.cenario === h ? "ativo" : ""}" title="${M.CENARIOS[h].rotulo}">${h}h</button>`).join("")}</div>
+        <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${cenAtual === h ? "ativo" : ""}" title="${M.CENARIOS[h].rotulo}${orc ? " · conta do QL Orçado" : ""}">${h}h</button>`).join("")}</div>
         <div class="quem"><strong>${esc(sessao.email)}</strong>${esc(ROTULO_PERFIL[sessao.perfil] || "")}</div>
         <button class="btn btn-peq btn-vidro" data-acao="imprimir" title="Imprimir ou salvar em PDF">PDF</button>
         <button class="btn btn-peq btn-vidro" data-acao="tema" title="Tema claro/escuro">◐</button>
@@ -606,10 +624,13 @@ function htmlAbas() {
   const cur = lerChave(est.setor);
   const salvosDept = (dept) => est.dados.planos.some((x) => lerChave(x.setor)?.dept === dept);
   const sujoDept = (dept) => Object.keys(est.planos).some((k) => est.planos[k].sujo && lerChave(k)?.dept === dept);
-  const linhaD = est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${dp.dept === cur.dept ? "ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("");
+  const orc = est.modo === "orcado";
+  const abaOrc = `<button type="button" data-acao="modo" data-v="orcado" class="aba-orc${orc ? " ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/></svg>QL Orçado x 5x2</button>`;
+  const linhaD = abaOrc + est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${!orc && dp.dept === cur.dept ? "ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("");
   const dp = est.estrutura.find((x) => x.dept === cur.dept);
   const chips = dp ? [[chaveSetor(dp.dept), "Todas as funções", dp.n], ...dp.funcoes.map((f) => [chaveSetor(dp.dept, f.f), titulo(f.f), f.n])] : [];
   const linhaF = chips.map(([k, r, n]) => `<button type="button" data-acao="setor" data-setor="${esc(k)}" class="chip-setor${k === est.setor ? " ativo" : ""}">${esc(r)} <span class="qtd">${n}</span>${marcasSetor(k)}</button>`).join("");
+  if (orc) return `<nav class="abas nao-imprime">${linhaD}</nav>`;
   return `<nav class="abas nao-imprime">${linhaD}</nav><div class="funcoes nao-imprime"><span class="texto-fraco">Montar a escala de:</span>${linhaF}</div>
     <h2 class="titulo-impressao">${esc(nomeLoja(est.loja))} · ${esc(infoSetor(est.setor).rotulo)}</h2>`;
 }
@@ -712,7 +733,7 @@ function htmlEscala(p, pessoas, an) {
     const cels = dias.map((d) => {
       const v = M.valor(p, pe.id, d);
       const tit = v === "T" ? `${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""} · almoço ${alm}` : v === "D" ? `Domingo ${p.domingo.entrada}–${p.domingo.saida}` : v === "F" ? "Folga" : "Ausente (férias/atestado)";
-      return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(pe.nome + " · " + M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v === "T" ? "" : v}</button></td>`;
+      return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(pe.nome + " · " + M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v}</button></td>`;
     }).join("");
     const hs = semanasVis.map((w) => { const h = an.horas[pe.id][w]; return `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`; }).join("");
     const sub = [alm !== "—" ? `alm ${alm}` : "", porFuncao && pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
@@ -745,9 +766,9 @@ function htmlEscala(p, pessoas, an) {
         <button class="btn btn-borda" data-acao="csv">Planilha</button>
       </div>
     </div>
-    <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (vazio = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
+    <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (T = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
     <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${corpo}${total}</tbody></table></div>
-    <div class="legenda"><span><i class="cel T"></i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (meio período)</span><span><i class="cel X">X</i>ausente (férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas em laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
+    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (meio período)</span><span><i class="cel X">X</i>ausente (férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas em laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
   </section>`;
 }
 
@@ -891,6 +912,7 @@ document.addEventListener("click", (ev) => {
   if (a === "sair") return sair(false);
   if (a === "recarregar") {
     if (algumSujo()) { salvarRascunhosTodos(); }
+    ORC.dados = null;
     return carregarLoja(est.loja);
   }
   if (a === "tema") {
@@ -898,9 +920,17 @@ document.addEventListener("click", (ev) => {
     document.documentElement.dataset.theme = atual; gravarLocal("escala_web_tema", atual); return;
   }
   if (a === "imprimir") return window.print();
-  if (a === "setor") return abrirSetor(el.dataset.setor);
-  if (a === "dept") { const dpt = el.dataset.dept; return abrirSetor(est.ultimoPorDept[dpt] && lerChave(est.ultimoPorDept[dpt])?.dept === dpt ? est.ultimoPorDept[dpt] : chaveSetor(dpt)); }
-  if (a === "cenario") return trocarCenario(+el.dataset.h);
+  if (a === "modo") { trocarModo(el.dataset.v); return; }
+  if (a === "orc-base") { ORC.base = el.dataset.v; gravarLocal("escala_orc_base", ORC.base); return render(); }
+  if (a === "orc-cenario") { ORC.cenario = +el.dataset.h; gravarLocal("escala_orc_cenario", String(ORC.cenario)); return render(); }
+  if (a === "orc-loja") { ORC.escopo = +el.dataset.l; render(); return window.scrollTo({ top: 0, behavior: "smooth" }); }
+  if (a === "orc-recarregar") { ORC.erro = null; ORC.dados = null; render(); return; }
+  if (a === "setor") { est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); return abrirSetor(el.dataset.setor); }
+  if (a === "dept") { est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); const dpt = el.dataset.dept; return abrirSetor(est.ultimoPorDept[dpt] && lerChave(est.ultimoPorDept[dpt])?.dept === dpt ? est.ultimoPorDept[dpt] : chaveSetor(dpt)); }
+  if (a === "cenario") {
+    if (est.modo === "orcado") { ORC.cenario = +el.dataset.h; gravarLocal("escala_orc_cenario", String(ORC.cenario)); return render(); }
+    return trocarCenario(+el.dataset.h);
+  }
   if (a === "redistribuir") return redistribuirAgora();
   if (a === "destravar") return destravar();
   if (a === "csv") return exportarCSV();
@@ -934,8 +964,11 @@ document.addEventListener("change", (ev) => {
     const nova = +el.value;
     if (algumSujo() && !confirm("Há alterações não salvas nesta loja. Trocar mesmo assim? (elas ficam guardadas neste navegador)")) { el.value = est.loja; return; }
     salvarRascunhosTodos();
+    if (ORC.escopo !== "TL") ORC.escopo = nova;
     return carregarLoja(nova);
   }
+  if (el.dataset.acaoChange === "orc-escopo") { ORC.escopo = el.value === "TL" ? "TL" : +el.value; return render(); }
+  if (el.dataset.acaoChange === "orc-gestao") { ORC.gestaoFixa = el.checked; gravarLocal("escala_orc_gestao", el.checked ? "1" : "0"); return render(); }
   if (el.dataset.acaoChange === "inicio") {
     const d = M.lerISO(el.value);
     if (!d) return;

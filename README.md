@@ -8,6 +8,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
 ## O que tem
+- Aba **QL Orçado x 5x2**: o organograma do QL Orçado (mesmos números do QL) com o Real (Ativos + Férias) e quantas pessoas cada jornada pede para manter as mesmas horas de hoje (pessoas × 44 ÷ nova jornada), por loja e Total Lojas. Gestão e aprendiz ficam iguais; arredondamento por departamento. Cada setor da escala mostra uma faixa com o orçado dele.
 - Cenários 44h / 42h / 40h, jornada por turno, saída calculada (entrada + jornada + almoço)
 - Escala de 1 a 8 semanas a partir de um domingo, com T (trabalha), F (folga), D (domingo, meio período) e X (ausente)
 - Redistribuição automática: domingo em rodízio (só o mínimo necessário, respeitando o máximo de domingos seguidos) e as folgas de seg a sáb nos dias de menos movimento sem furar o mínimo; ajustes feitos à mão ficam travados
@@ -18,7 +19,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - Imprimir / PDF e baixar planilha (CSV que abre no Excel)
 
 ## Publicar
-1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql` e o arquivo de senhas (02b, guardado fora do GitHub). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
+1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) e `sql/03_escala_orcado.sql`. Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
 2. Subir a pasta `docs/` e o `sql/` neste repositório (pode apagar o `index.html`, `app.js` e `style.css` antigos da raiz).
 3. Settings → Pages → Branch `main`, pasta **/docs** → Save.
 
