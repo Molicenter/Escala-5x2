@@ -118,7 +118,16 @@ function calcLoja(l, horas) {
     if (!depts.has(o.d)) depts.set(o.d, { d: o.d, od: o.od ?? 0, funcs: [] });
     depts.get(o.d).funcs.push({ f: o.f, of: o.of ?? 0, q, r, base, exato, fixa, conta: o.c !== false });
   }
-  const lista = [...depts.values()].map((dp) => fecharDept(dp, horas));
+  const lista = [...depts.values()].map((dp) => fecharDept(dp));
+  // arredondamento por LOJA: soma o que falta em todos os departamentos e arredonda para cima
+  // (uma pessoa a mais no máximo); as contratações vão para os departamentos com a maior fração
+  const extras = lista.map((dp) => Math.max(0, dp.varExato - dp.varBase));
+  const totalAdd = Math.ceil(extras.reduce((a, b) => a + b, 0) - 1e-6);
+  const add = extras.map((x) => Math.floor(x + 1e-9));
+  let resto = totalAdd - add.reduce((a, b) => a + b, 0);
+  const ordem = extras.map((x, i) => [x - add[i], i]).sort((a, b) => b[0] - a[0]);
+  for (const [, i] of ordem) { if (resto <= 0) break; add[i]++; resto--; }
+  lista.forEach((dp, i) => { dp.add = add[i]; dp.precisa = dp.base + add[i]; });
   // gente do quadro em função que não existe no orçado (ex.: nome diferente no Senior)
   let foraOrc = 0;
   for (const [k, n] of real) if (!usados.has(k)) foraOrc += n;
@@ -139,19 +148,16 @@ function itensDoReal(l) {
   }
   return [...m.values()].sort((a, b) => a.od - b.od || a.d.localeCompare(b.d) || a.f.localeCompare(b.f));
 }
-function fecharDept(dp, horas) {
+function fecharDept(dp) {
   const conta = dp.funcs.filter((f) => f.conta);
   const fixos = conta.filter((f) => f.fixa).reduce((s, f) => s + f.base, 0);
   const varExato = conta.filter((f) => !f.fixa).reduce((s, f) => s + f.exato, 0);
   const varBase = conta.filter((f) => !f.fixa).reduce((s, f) => s + f.base, 0);
-  const varPrecisa = Math.max(varBase, Math.round(varExato + 1e-9));
-  const sobra = Math.max(0, varExato - varPrecisa);
   return {
-    ...dp,
+    ...dp, varExato, varBase,
     q: dp.funcs.reduce((s, f) => s + (f.conta ? f.q : 0), 0),
     r: dp.funcs.reduce((s, f) => s + (f.conta ? f.r : 0), 0),
-    base: fixos + varBase, exato: fixos + varExato, precisa: fixos + varPrecisa,
-    horasCobrir: Math.round(sobra * horas),
+    base: fixos + varBase, exato: fixos + varExato, precisa: fixos + varBase, horasCobrir: 0,
   };
 }
 
@@ -222,7 +228,7 @@ function htmlOrcado() {
       <span class="t">${h}h por semana <small>${M.fmtDur(M.CENARIOS[h].jornadaMin)} por dia no 5x2</small></span>
       <b class="num">${x.precisa}</b>
       <span class="add ${add > 0 ? "mais" : "zero"}">${add > 0 ? `contratar +${add}` : "mesmo quadro"}</span>
-      <small>conta exata ${fmt1(x.exato)}${x.horasCobrir ? ` · ${x.horasCobrir}h/sem a cobrir` : ""}</small></button>`;
+      <small>conta exata ${fmt1(x.exato)} · arredondado para cima por loja</small></button>`;
   }).join("");
 
   const kpis = [["Venda", fmtMoedaOrc(P.venda)], ["Média 6 Meses", fmtMoedaOrc(P.media_6_meses)], ["Venda R$ / Funcionário", fmtMoedaOrc(P.venda_por_funcionario)],
@@ -241,7 +247,7 @@ function htmlOrcado() {
     }).join("");
     return `<div class="org-col"><div class="org-dept" style="background:${bg};color:${fg}">${esc(dp.d)}</div>${funcs}
       <div class="org-func org-tot"><div>Total · ${esc(rotBase.toLowerCase())}</div><b class="num">${dp.base}</b>
-        <span class="orc-prec">no ${H}h: <b>${dp.precisa}</b>${add > 0 ? ` <em>+${add}</em>` : ""}${dp.horasCobrir ? `<small>${dp.horasCobrir}h/sem a cobrir</small>` : ""}</span></div></div>`;
+        <span class="orc-prec">no ${H}h: <b>${dp.precisa}</b>${add > 0 ? ` <em>+${add}</em>` : ""}</span></div></div>`;
   }).join("");
 
   const add = c.precisa - c.base;
@@ -253,10 +259,10 @@ function htmlOrcado() {
     <div class="org-titulo">QL Orçado x 5x2 — ${esc(nomeEsc)}</div>
     ${ctrl}${avisoCD}
     <div class="org-kpis">${kpis.map(([a, b]) => `<div class="org-kpi"><span>${a}</span><b class="num">${esc(b)}</b></div>`).join("")}</div>
-    <div class="orc-cens">${cards}</div>
+    <div class="orc-cens">${cards}</div>${porLoja}
     <p class="orc-explica">Hoje (6x1) todo mundo faz <b>44h</b>. Para a loja continuar com as mesmas horas de trabalho: <b>pessoas × 44 ÷ nova jornada</b>.
       Em 44h o 5x2 só reorganiza as folgas — não precisa contratar, mas cada dia tem menos gente e mais horas por pessoa (a aba <b>Cobertura</b> de cada setor mostra se o horário fecha).
-      O arredondamento é por departamento de cada loja: a partir de meia pessoa conta uma contratação; o que fica abaixo disso aparece como horas por semana a cobrir (banco de horas, coringa ou rodízio).</p>
+      O arredondamento é por loja: soma o que falta em todos os departamentos e arredonda para cima (no máximo 1 pessoa a mais que a conta exata por loja); as contratações vão para os departamentos onde a falta é maior. A fração de cada função (+0,5) mostra onde está a necessidade.</p>
     <div class="org-depts">${colunas}</div>
     <div class="org-rodape">
       <div class="org-big"><span>Total (Orçado)</span><b class="num">${c.q}</b></div>
@@ -265,20 +271,24 @@ function htmlOrcado() {
       <div class="org-big destaque"><span>Precisa no ${H}h (a partir do ${esc(rotBase.toLowerCase())})</span><b class="num">${c.precisa} <small>${add > 0 ? `+${add}` : "="}</small></b></div>
     </div>
     <p class="nota">* Não entra no total (ex.: Aprendiz), como na planilha do QL. Em cada função: <b>O</b> = orçado · <b>R</b> = real hoje · <b>+0,5</b> = o que a função precisaria a mais no ${H}h.${c.foraOrc ? ` ${c.foraOrc} pessoa(s) do quadro estão em função sem par no orçado e não entram no Real desta tela.` : ""}</p>
-  </section>${porLoja}`;
+  </section>`;
 }
 
 function htmlOrcadoPorLoja(lojas) {
-  const linha = (rot, r, cls) => {
-    const b = r[44].base;
-    return `<tr class="${cls || ""}"><td>${rot}</td><td class="num">${r[44].semOrc.length === r[44].lojas.length ? "—" : r[44].q}</td><td class="num">${r[44].r}</td><td class="num b">${b}</td>
-      ${[44, 42, 40].map((h) => { const a = r[h].precisa - b; return `<td class="num${h === ORC.cenario ? " sel" : ""}">${r[h].precisa}${a > 0 ? ` <em>+${a}</em>` : ""}</td>`; }).join("")}</tr>`;
-  };
   const calc3 = (e) => Object.fromEntries([44, 42, 40].map((h) => [h, calcEscopo(e, h)]));
-  const linhas = lojas.map((l) => linha(`<button type="button" class="link" data-acao="orc-loja" data-l="${l}">${esc(nomeLoja(l))}</button>${temOrcado(l) ? "" : ' <small class="texto-fraco">sem orçado · usa o real</small>'}`, calc3(l))).join("")
+  const cel = (r, h) => {
+    const a = r[h].precisa - r[44].base;
+    return `<td class="num cen${h === ORC.cenario ? " sel" : ""}"><b>${r[h].precisa}</b>${a > 0 ? `<em>+${a}</em>` : '<i>=</i>'}</td>`;
+  };
+  const linha = (rot, r, cls) => `<tr class="${cls || ""}"><td class="loja">${rot}</td>
+    <td class="num">${r[44].semOrc.length === r[44].lojas.length ? "—" : r[44].q}</td><td class="num">${r[44].r}</td>
+    <td class="num hoje">${r[44].base}</td>${cel(r, 42)}${cel(r, 40)}</tr>`;
+  const linhas = lojas.map((l) => linha(`<button type="button" class="link" data-acao="orc-loja" data-l="${l}">${esc(nomeLoja(l))}</button>${temOrcado(l) ? "" : '<small>sem orçado · usa o real</small>'}`, calc3(l))).join("")
     + linha(`<b>${esc(TOTAIS_ORC[ORC.escopo].nome)}</b>`, calc3(ORC.escopo), "linha-total");
-  return `<section class="cartao"><div class="cartao-cab"><div><h2>Por loja</h2><p class="sub">Quanto cada loja precisa em cada jornada, a partir do ${ORC.base === "real" ? "real de hoje" : "QL Orçado"}. Clique na loja para abrir o organograma dela.</p></div></div>
-    <div class="rolagem-conf"><table class="conf orc-tab"><thead><tr><th>Loja</th><th>Orçado</th><th>Real</th><th>Base</th><th>44h</th><th>42h</th><th>40h</th></tr></thead><tbody>${linhas}</tbody></table></div></section>`;
+  return `<div class="orc-porloja">
+    <div class="orc-porloja-cab"><h3>Loja a loja: quantas pessoas cada jornada pede</h3><small>a partir do ${ORC.base === "real" ? "real de hoje" : "QL Orçado"}${ORC.gestaoFixa ? " · gestão e aprendiz fixos" : " · aprendiz fixo"} · clique na loja para abrir o organograma</small></div>
+    <div class="rolagem-conf"><table class="orc-reuniao"><thead><tr><th class="loja">Loja</th><th>Orçado</th><th>Real hoje</th><th class="hoje">Hoje<small>6x1 · 44h</small></th><th class="cen">42h<small>8h24 no 5x2</small></th><th class="cen">40h<small>8h00 no 5x2</small></th></tr></thead><tbody>${linhas}</tbody></table></div>
+  </div>`;
 }
 
 // ------------------------------------------------------------
@@ -304,7 +314,7 @@ function htmlFaixaOrcado(p) {
     }
   }
   if (!achou) return "";
-  const precisa = Math.max(base, Math.round(exato + 1e-9));
+  const precisa = Math.max(base, Math.ceil(exato - 1e-6));
   const naEscala = ativos(p).length;
   const falta = precisa - naEscala;
   return `<div class="faixa-orc nao-imprime">

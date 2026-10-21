@@ -2,7 +2,7 @@
 // "Rede primeiro": sempre busca a versão nova; só usa a cópia guardada se estiver sem internet.
 // As chamadas ao Supabase NÃO passam por aqui (são sempre ao vivo).
 const PREFIXO = "molicenter-escala-";
-const CACHE = PREFIXO + "v6";
+const CACHE = PREFIXO + "v8";
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "manifest.json"])).catch(() => {}).then(() => self.skipWaiting()));

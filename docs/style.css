@@ -417,3 +417,25 @@ table.conf { width: 100%; border-collapse: collapse; font-size: .86rem; }
 }
 .orc-aviso { background: var(--laranja-claro); color: var(--laranja); border-radius: 10px; padding: 8px 12px; font-size: .84rem; margin-bottom: 14px; }
 .orc-tab tr.linha-total td { border-top: 2px solid var(--azul); font-weight: 800; background: var(--azul-claro); }
+/* quadro loja a loja (visão Lojas TT / Lojas c/ CD) — pensado para mostrar em reunião */
+.orc-porloja { margin-top: 16px; border: 1px solid var(--borda); border-radius: var(--raio); overflow: hidden; }
+.orc-porloja-cab { background: var(--azul); color: #fff; padding: 10px 14px; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+:root[data-theme="dark"] .orc-porloja-cab { background: #134F7E; }
+.orc-porloja-cab h3 { margin: 0; font-size: 1rem; }
+.orc-porloja-cab small { color: #C9DCEC; font-size: .78rem; }
+table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
+.orc-reuniao th { background: var(--superficie-2); color: var(--texto-suave); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; padding: 9px 12px; text-align: center; border-bottom: 1px solid var(--borda); }
+.orc-reuniao th small { display: block; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--texto-fraco); }
+.orc-reuniao th.loja, .orc-reuniao td.loja { text-align: left; }
+.orc-reuniao td { padding: 9px 12px; border-bottom: 1px solid var(--borda); text-align: center; font-family: var(--mono); }
+.orc-reuniao td.loja { font-family: var(--fonte); font-weight: 700; }
+.orc-reuniao td.loja small { margin-left: 8px; color: var(--texto-fraco); font-weight: 500; font-size: .78rem; }
+.orc-reuniao td.hoje { font-weight: 800; background: var(--azul-claro); }
+.orc-reuniao td.cen b { font-size: 1.08rem; }
+.orc-reuniao td.cen em { font-style: normal; margin-left: 8px; background: var(--magenta-claro); color: var(--magenta); border-radius: 999px; padding: 1px 9px; font-weight: 800; font-size: .86rem; }
+.orc-reuniao td.cen i { font-style: normal; margin-left: 8px; color: var(--verde); font-weight: 800; }
+.orc-reuniao td.cen.sel { background: color-mix(in srgb, var(--magenta) 7%, transparent); }
+.orc-reuniao tr.linha-total td { border-top: 2px solid var(--azul); border-bottom: 0; background: var(--azul-claro); font-weight: 800; font-size: 1.05rem; }
+.orc-reuniao tr.linha-total td.cen b { font-size: 1.2rem; }
+.orc-reuniao tbody tr:not(.linha-total):hover td { background: var(--superficie-2); }
+@media print { .orc-porloja { break-inside: avoid; } .orc-reuniao td, .orc-reuniao th { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
