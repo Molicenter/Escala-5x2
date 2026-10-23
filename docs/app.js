@@ -389,9 +389,54 @@ function turnoParaEscala(p, escalaTxt) {
   return melhor.id;
 }
 
+// início (domingo) mais usado nas escalas salvas da loja — para os departamentos andarem juntos
+function inicioDaLoja() {
+  const cont = {};
+  for (const x of est.dados?.planos || []) { const i = x.dados?.inicio; if (i) cont[i] = (cont[i] || 0) + 1; }
+  const top = Object.entries(cont).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+  return top ? top[0] : null;
+}
+// departamentos com início diferente → no Total e no Hoje alguns ficam "fora do período"
+function iniciosDiferentes() {
+  const ks = est.estrutura.flatMap((dp) => setoresDoDept(dp.dept));
+  const porIni = {};
+  for (const k of ks) { const reg = est.planos[k] || null; const i = reg ? reg.p.inicio : est.dados.planos.find((x) => x.setor === k)?.dados?.inicio; if (i) (porIni[i] ||= []).push(k); }
+  return porIni;
+}
+function htmlAvisoInicios() {
+  const porIni = iniciosDiferentes();
+  const inis = Object.keys(porIni).sort();
+  if (inis.length < 2) return "";
+  const det = inis.map((i) => `<b>${M.dataBR(M.lerISO(i))}</b>: ${porIni[i].map((k) => esc(titulo(lerChave(k).dept) + (lerChave(k).funcao ? " · " + titulo(lerChave(k).funcao) : ""))).join(", ")}`).join("<br>");
+  return `<div class="aviso-topo nao-imprime"><span><b>As escalas desta loja começam em datas diferentes</b>, por isso alguns departamentos aparecem vazios ou "fora do período" em algumas semanas.<br>${det}</span>
+    <span class="alinhar">${inis.map((i) => `<button class="btn btn-peq btn-borda" data-acao="alinhar-inicio" data-ini="${i}">Alinhar todos em ${M.dataBR(M.lerISO(i))}</button>`).join(" ")}</span></div>`;
+}
+function alinharInicio(ini) {
+  const ks = [...new Set(est.estrutura.flatMap((dp) => setoresDoDept(dp.dept)))];
+  let mud = 0, trav = 0;
+  est.silencioso = true;
+  try {
+    for (const k of ks) {
+      const reg = garantirPlano(k), p = reg.p;
+      if (p.inicio === ini) continue;
+      if (!podeEditar(p)) { trav++; continue; }
+      p.inicio = ini;
+      const pa = p.periodoAnterior;
+      if (pa && M.iso(M.somaDias(M.lerISO(pa.fim), 1)) !== ini) { delete p.cauda; delete p.periodoAnterior; }
+      M.redistribuir(p, ativos(p));
+      if (statusDe(p).s === "enviada") { const ev = { s: "rascunho", por: sessao.email, em: new Date().toISOString(), obs: "Início alinhado com a loja" }; p.status = ev; p.statusHist = [ev, ...(p.statusHist || [])].slice(0, 20); }
+      reg.sujo = true; gravarRascunho(est.loja, k, { base: reg.versao, p });
+      mud++;
+    }
+  } finally { est.silencioso = false; }
+  render();
+  toast(`${mud} escala(s) passaram a começar em ${M.dataBR(M.lerISO(ini))} e as folgas foram refeitas${trav ? ` (${trav} aprovada(s) não foram mexidas)` : ""}. Clique em Salvar.`, "ok");
+}
+
 function novoPlano(setor, doQL, hoje) {
   const cenario = 42;
-  const inicio = M.iso(M.domingoDe(hoje, true));
+  // começa no mesmo domingo que as escalas já salvas desta loja (o mais usado); sem nenhuma, no próximo domingo
+  const inicio = inicioDaLoja() || M.iso(M.domingoDe(hoje, true));
   const naEscala = doQL.filter((x) => !motivoSemEscala(x));
   const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
   const func = funcionamentoPadrao(lojaAtual());
@@ -1120,7 +1165,7 @@ function htmlTotal() {
     const alerta = l.avisos || l.faltas ? `<span class="chip ruim" title="${l.avisos} aviso(s) de regra · ${l.faltas} faixa(s) de 15 min abaixo do mínimo">${l.avisos + (l.faltas ? 1 : 0)} !</span>` : "";
     return `<tr class="linha-dept" data-acao="dept" data-dept="${esc(l.dp.dept)}" title="Abrir ${esc(titulo(l.dp.dept))}"><td class="col-nome"><b>${esc(titulo(l.dp.dept))}</b><small>${l.pessoas} na escala${l.parcial ? ` · só ${esc(l.parcial)}` : ""}</small></td>${vis.map((d) => celDia(d, l.porData[d.iso])).join("")}<td class="col-h sit">${sit}${alerta}</td></tr>`;
   }).join("");
-  return `<section class="cartao cartao-escala">
+  return `${htmlAvisoInicios()}<section class="cartao cartao-escala">
     <div class="cartao-cab"><div><h2>Total da loja · todos os departamentos</h2><p class="sub">Quantas pessoas trabalham em cada dia, somando a escala de cada departamento (a salva; sem escala salva entra a sugestão automática). Clique num departamento para abrir a escala dele.</p></div>
       <div class="ferramentas nao-imprime"><label class="campo"><span>Mostrar</span><select class="ent" data-acao-change="ver-semana">${opcoes([["todas", "Todas as semanas"], ...[...Array(base.semanas).keys()].map((w) => [w, `Semana ${w + 1}`])], est.verSemana)}</select></label></div></div>
     <div class="rolagem" data-rolagem="total"><table class="escala total-loja${vis.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${total}${corpo}</tbody></table></div>
@@ -1172,7 +1217,7 @@ function htmlHoje() {
       <div class="hj-nav nao-imprime">${nav(-1, "Ontem")}${nav(0, "Hoje")}${nav(1, "Amanhã")}<input type="date" class="ent" value="${data}" data-acao-change="hoje-data"></div></div>
       <div class="hj-resumo"><span><b>${totT}</b> trabalhando</span><span><b>${totF}</b> de folga</span>${totX ? `<span><b>${totX}</b> ausentes</span>` : ""}</div>
       <p class="sub">Pela escala de cada departamento (a salva; sem escala salva entra a sugestão automática).${fora ? ` ${fora} departamento(s) sem escala para esta data.` : ""}</p></section>
-    <div class="hj-grade">${blocos.join("")}</div>`;
+    ${htmlAvisoInicios()}<div class="hj-grade">${blocos.join("")}</div>`;
 }
 
 // ---------- troca de folga ----------
@@ -1633,6 +1678,7 @@ document.addEventListener("click", (ev) => {
   if (a === "sugerir-min") return sugerirMinimosAgora();
   if (a === "proximo-periodo") return proximoPeriodo();
   if (a === "hist-abrir") return abrirHistorico();
+  if (a === "alinhar-inicio") { if (confirm(`Fazer todas as escalas desta loja começarem em ${M.dataBR(M.lerISO(el.dataset.ini))}? As folgas de quem mudar de data são refeitas (ajustes à mão continuam travados).`)) alinharInicio(el.dataset.ini); return; }
   if (a === "hoje-ir") { const base = est.hoje ? M.iso(est.hoje) : M.iso(new Date()); HOJE.data = M.iso(M.somaDias(M.lerISO(base), +el.dataset.d)); return render(); }
   if (a === "hist-restaurar") return restaurarVersao(el.dataset.id);
   if (a === "troca-abrir") { est.aberto = est.aberto === "troca" ? null : "troca"; TROCA.modo ||= "mover"; return render(); }
