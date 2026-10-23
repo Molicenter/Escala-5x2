@@ -196,10 +196,12 @@ const est = {
   planos: {},             // setor → { p (plano), versao, usuario, sujo }
   semanaMapa: 0,
   aba: lerLocal("escala_web_aba") || "escala",
-  modo: ["orcado", "painel"].includes(lerLocal("escala_web_modo")) ? lerLocal("escala_web_modo") : "escala",   // "escala" (setor), "painel" (Painel da mudança) ou "orcado" (QL Orçado x 5x2)
+  modo: ["orcado", "painel", "total"].includes(lerLocal("escala_web_modo")) ? lerLocal("escala_web_modo") : "escala",   // "escala" (setor), "painel" (Painel da mudança) ou "orcado" (QL Orçado x 5x2)
   verSemana: "todas",
   mostrarMinimo: false,
   mostrarTodosAlertas: false,
+  aberto: null,           // "sync" (aviso amarelo) ou "atencao" (o que precisa de atenção) aberto
+  silencioso: false,      // não mostrar avisos ao abrir vários setores de uma vez (visão Total)
   sync: {},               // setor → { novos:[], saiu:[] }
 };
 const algumSujo = () => Object.values(est.planos).some((x) => x.sujo);
@@ -265,7 +267,7 @@ function garantirPlano(k) {
   const rasc = lerRascunho(d.loja, k);
   if (rasc && (rasc.base || null) === (versao || null)) {
     p = normalizarPlano(rasc.p, k); sujo = true;
-    toast("Recuperei alterações que não tinham sido salvas.", "ok");
+    if (!est.silencioso) toast("Recuperei alterações que não tinham sido salvas.", "ok");
   } else if (rasc) gravarRascunho(d.loja, k, null);
   const migrou = !!p._migrou; delete p._migrou;
   est.sync[k] = sincronizar(p, doQL);
@@ -273,13 +275,13 @@ function garantirPlano(k) {
   if ((est.sync[k].dsrMudou || migrou) && salvo) {
     sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
     const o = [migrou ? "regras novas da escala (horário da loja, 8 semanas, sem folga ter/sáb)" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
-    toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
+    if (!est.silencioso) toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
   }
   est.planos[k] = { p, versao, usuario, sujo };
   return est.planos[k];
 }
 function abrirSetor(k) {
-  est.setor = k; est.semanaMapa = 0;
+  est.setor = k; est.semanaMapa = 0; est.aberto = null;
   gravarLocal("escala_web_setor", k);
   const c = lerChave(k);
   if (c) { est.ultimoPorDept[c.dept] = k; gravarLocal("escala_web_ultimo_dept", JSON.stringify(est.ultimoPorDept)); }
@@ -456,7 +458,8 @@ function clicarCelula(pid, isoData) {
 }
 
 function trocarModo(m) {
-  est.modo = ["orcado", "painel"].includes(m) ? m : "escala";
+  est.modo = ["orcado", "painel", "total"].includes(m) ? m : "escala";
+  est.aberto = null;
   gravarLocal("escala_web_modo", est.modo);
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -626,7 +629,7 @@ function render() {
   const p = plano();
   if (est.modo !== "escala") {
     $("#topo").innerHTML = htmlTopo(p);
-    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : htmlOrcado());
+    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : est.modo === "total" ? htmlTotal() : htmlOrcado());
     htmlBarra();
     return;
   }
@@ -641,8 +644,8 @@ function render() {
     : htmlPessoas(p);
   $("#topo").innerHTML = htmlTopo(p);
   $("#conteudo").innerHTML = [
-    htmlAbas(), htmlAvisoSync(), htmlFaixaOrcado(p),
-    `<div class="painel">${htmlKpis(p, pessoas, an)}${htmlAlertas(p, an)}</div>`,
+    htmlAbas(p, an), htmlAberto(p, an), htmlFaixaOrcado(p),
+    `<div class="painel painel-so">${htmlKpis(p, pessoas, an)}</div>`,
     htmlRoteiro(p, an),
     `<nav class="visoes nao-imprime">${VISOES.map(([id, r, ic]) => `<button type="button" data-acao="visao" data-v="${id}" class="${id === visao ? "ativo" : ""}">${ic}<span>${r}</span>${id === "cobertura" && an.faixasAbaixo ? `<em>${an.problemas.length}</em>` : ""}</button>`).join("")}</nav>`,
     corpo,
@@ -653,14 +656,14 @@ function render() {
 
 function htmlTopo(p) {
   const lojas = est.dados.lojas || [];
-  const modoOrc = est.modo !== "escala" && ORC.dados;
+  const modoOrc = (est.modo === "orcado" || est.modo === "painel") && ORC.dados;
   const optsOrc = modoOrc ? opcoesEscopoOrc() : [];
   const seletor = modoOrc
     ? (optsOrc.length > 1 ? `<select class="sel-loja" data-acao-change="orc-escopo" aria-label="Loja ou total">${opcoes(optsOrc, ORC.escopo)}</select>` : `<span class="loja-fixa">${esc(nomeEscopoOrc(ORC.escopo ?? est.loja))}</span>`)
     : sessao.loja_fixa != null || lojas.length <= 1
     ? `<span class="loja-fixa">${nomeLoja(est.loja)}</span>`
     : `<select class="sel-loja" data-acao-change="loja" aria-label="Loja">${opcoes(lojas.map((l) => [l, nomeLoja(l)]), est.loja)}</select>`;
-  const orc = est.modo !== "escala";
+  const orc = est.modo === "orcado" || est.modo === "painel";
   const cenAtual = orc ? ORC.cenario : p.cenario;
   const j = M.CENARIOS[cenAtual];
   const fh = (h) => (h ? `${fmtHoraPilula(h[0])}–${fmtHoraPilula(h[1])}` : "fechado");
@@ -701,31 +704,119 @@ function marcasSetor(k) {
   else if (salvo) s += `<span class="salvo" title="escala salva">✓</span>`;
   return s;
 }
-function htmlAbas() {
+function htmlAbas(p, an) {
   const cur = lerChave(est.setor);
   const salvosDept = (dept) => est.dados.planos.some((x) => lerChave(x.setor)?.dept === dept);
   const sujoDept = (dept) => Object.keys(est.planos).some((k) => est.planos[k].sujo && lerChave(k)?.dept === dept);
-  const orc = est.modo !== "escala";
-  const abaPainel = `<button type="button" data-acao="modo" data-v="painel" class="aba-orc${est.modo === "painel" ? " ativo" : ""}" title="Resumo para a reunião: quadro, contratações por jornada, horários e andamento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>Painel da mudança</button>`;
-  const abaOrc = abaPainel + `<button type="button" data-acao="modo" data-v="orcado" class="aba-orc${est.modo === "orcado" ? " ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="17" height="17"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/></svg>QL Orçado x 5x2</button>`;
-  const linhaD = abaOrc + est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${!orc && dp.dept === cur.dept ? "ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("");
+  const m = est.modo;
+  const icPainel = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>`;
+  const icOrc = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/></svg>`;
+  const icTot = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`;
+  const visoesGerais = `<div class="seg-modos">
+      <button type="button" data-acao="modo" data-v="painel" class="${m === "painel" ? "ativo" : ""}" title="Resumo para a reunião: quadro, contratações por jornada, horários e andamento">${icPainel}Painel da mudança</button>
+      <button type="button" data-acao="modo" data-v="orcado" class="${m === "orcado" ? "ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede">${icOrc}QL Orçado x 5x2</button>
+    </div>`;
+  const total = est.estrutura.reduce((s2, x) => s2 + x.n, 0);
+  const depts = `<div class="depts">
+      <button type="button" data-acao="modo" data-v="total" class="dep dep-total${m === "total" ? " ativo" : ""}" title="Todos os departamentos juntos: quantos trabalham em cada dia">${icTot}Total <span class="qtd">${total}</span></button>
+      ${est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="dep${m === "escala" && dp.dept === cur?.dept ? " ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("")}
+    </div>`;
+  const nav = `<div class="navegacao nao-imprime"><div class="nav-linha"><span class="nav-rot">Visões</span>${visoesGerais}</div><div class="nav-linha"><span class="nav-rot">Departamentos</span>${depts}</div></div>`;
+  if (m !== "escala") return nav;
   const dp = est.estrutura.find((x) => x.dept === cur.dept);
   const chips = dp ? [[chaveSetor(dp.dept), "Todas as funções", dp.n], ...dp.funcoes.map((f) => [chaveSetor(dp.dept, f.f), titulo(f.f), f.n])] : [];
   const linhaF = chips.map(([k, r, n]) => `<button type="button" data-acao="setor" data-setor="${esc(k)}" class="chip-setor${k === est.setor ? " ativo" : ""}">${esc(r)} <span class="qtd">${n}</span>${marcasSetor(k)}</button>`).join("");
-  if (orc) return `<nav class="abas nao-imprime">${linhaD}</nav>`;
-  return `<nav class="abas nao-imprime">${linhaD}</nav><div class="funcoes nao-imprime"><span class="texto-fraco">Montar a escala de:</span>${linhaF}</div>
+  // botões de aviso: ! amarelo = mudanças no quadro do Senior · ! vermelho = o que precisa de atenção
+  const nSync = partesSync(p).length, nAt = an ? itensAtencao(p, an).length : 0;
+  const bts = `<div class="avisos-bts">
+      ${nSync ? `<button type="button" class="bt-aviso amarelo${est.aberto === "sync" ? " ativo" : ""}" data-acao="abrir-aviso" data-v="sync" title="Mudanças no quadro do Senior">!</button>` : ""}
+      ${nAt ? `<button type="button" class="bt-aviso vermelho${est.aberto === "atencao" ? " ativo" : ""}" data-acao="abrir-aviso" data-v="atencao" title="O que precisa de atenção">!<em>${nAt}</em></button>` : `<span class="bt-aviso ok" title="Nada precisa de atenção">✓</span>`}
+    </div>`;
+  return `${nav}<div class="funcoes nao-imprime"><span class="texto-fraco">Montar a escala de:</span>${linhaF}${bts}</div>
     <h2 class="titulo-impressao">${esc(nomeLoja(est.loja))} · ${esc(infoSetor(est.setor).rotulo)}</h2>`;
 }
 
-function htmlAvisoSync() {
+// ============================================================
+// VISÃO TOTAL: todos os departamentos juntos (quantos trabalham em cada dia)
+// Cada departamento usa a escala salva dele: o departamento inteiro, ou as funções salvas
+// separadas. Departamento sem escala salva entra com a sugestão automática (marcado "sugestão").
+// ============================================================
+function setoresDoDept(dept) {
+  const salvos = est.dados.planos.map((x) => x.setor).filter((k) => lerChave(k)?.dept === dept);
+  const abertos = Object.keys(est.planos).filter((k) => est.planos[k].sujo && lerChave(k)?.dept === dept);
+  const todos = [...new Set([...salvos, ...abertos])];
+  if (todos.includes(chaveSetor(dept))) return [chaveSetor(dept)];
+  return todos.length ? todos : [chaveSetor(dept)];
+}
+function htmlTotal() {
+  const base = plano();
+  const dias = M.datasDoPlano(base);
+  const semanasVis = est.verSemana === "todas" ? [...Array(base.semanas).keys()] : [+est.verSemana];
+  const vis = dias.filter((d) => semanasVis.includes(d.semana));
+  const linhas = [];
+  est.silencioso = true;
+  try {
+    for (const dp of est.estrutura) {
+      const ks = setoresDoDept(dp.dept);
+      const porData = {};
+      let pessoas = 0, avisos = 0, faltas = 0, salvo = true, sujo = false;
+      for (const k of ks) {
+        const reg = garantirPlano(k);
+        const pes = ativos(reg.p);
+        const an = M.analisar(reg.p, pes);
+        pessoas += pes.length; avisos += an.avisos.length; faltas += an.faixasAbaixo;
+        for (const x of an.porDia) porData[x.iso] = (porData[x.iso] || 0) + x.trab;
+        if (!est.dados.planos.some((y) => y.setor === k)) salvo = false;
+        if (reg.sujo) sujo = true;
+      }
+      const parcial = ks.length && !ks.includes(chaveSetor(dp.dept)) ? ks.map((k) => titulo(lerChave(k).funcao)).join(", ") : "";
+      linhas.push({ dp, ks, porData, pessoas, avisos, faltas, salvo, sujo, parcial });
+    }
+  } finally { est.silencioso = false; }
+  const tot = {};
+  for (const l of linhas) for (const d of vis) tot[d.iso] = (tot[d.iso] || 0) + (l.porData[d.iso] ?? 0);
+  const totPes = linhas.reduce((s2, l) => s2 + l.pessoas, 0);
+
+  let cabSem = `<tr class="cab-sem"><th class="col-nome" rowspan="2">Departamento</th>`;
+  for (const w of semanasVis) cabSem += `<th colspan="7" class="ini-sem">Semana ${w + 1} · ${M.dataCurta(dias[w * 7].d)}–${M.dataCurta(dias[w * 7 + 6].d)}</th>`;
+  cabSem += `<th class="col-h" rowspan="2">Situação</th></tr>`;
+  const hojeISO = est.hoje ? M.iso(est.hoje) : "";
+  const cabDia = `<tr class="cab-dia">${vis.map((d) => `<th class="${d.dow === 0 ? "dom ini-sem" : ""}${d.iso === hojeISO ? " hoje" : ""}">${d.d.getUTCDate()}<small>${M.DOW[d.dow].slice(0, 3)}</small></th>`).join("")}</tr>`;
+  const celDia = (d, v) => `<td class="${d.dow === 0 ? "ini-sem dom" : ""}">${v ?? "—"}</td>`;
+  const total = `<tr class="total topo"><td class="col-nome"><b>Trabalhando no dia</b><small>${totPes} pessoas na escala</small></td>${vis.map((d) => celDia(d, tot[d.iso])).join("")}<td class="col-h"></td></tr>`;
+  const corpo = linhas.map((l) => {
+    const sit = l.sujo ? `<span class="chip">não salva</span>` : l.salvo ? `<span class="chip ok">salva</span>` : `<span class="chip sug">sugestão</span>`;
+    const alerta = l.avisos || l.faltas ? `<span class="chip ruim" title="${l.avisos} aviso(s) de regra · ${l.faltas} faixa(s) de 15 min abaixo do mínimo">${l.avisos + (l.faltas ? 1 : 0)} !</span>` : "";
+    return `<tr class="linha-dept" data-acao="dept" data-dept="${esc(l.dp.dept)}" title="Abrir ${esc(titulo(l.dp.dept))}"><td class="col-nome"><b>${esc(titulo(l.dp.dept))}</b><small>${l.pessoas} na escala${l.parcial ? ` · só ${esc(l.parcial)}` : ""}</small></td>${vis.map((d) => celDia(d, l.porData[d.iso])).join("")}<td class="col-h sit">${sit}${alerta}</td></tr>`;
+  }).join("");
+  return `<section class="cartao cartao-escala">
+    <div class="cartao-cab"><div><h2>Total da loja · todos os departamentos</h2><p class="sub">Quantas pessoas trabalham em cada dia, somando a escala de cada departamento (a salva; sem escala salva entra a sugestão automática). Clique num departamento para abrir a escala dele.</p></div>
+      <div class="ferramentas nao-imprime"><label class="campo"><span>Mostrar</span><select class="ent" data-acao-change="ver-semana">${opcoes([["todas", "Todas as semanas"], ...[...Array(base.semanas).keys()].map((w) => [w, `Semana ${w + 1}`])], est.verSemana)}</select></label></div></div>
+    <div class="rolagem" data-rolagem="total"><table class="escala total-loja${vis.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${total}${corpo}</tbody></table></div>
+  </section>`;
+}
+
+// conteúdo do botão aberto (fica embaixo da linha das funções)
+function htmlAberto(p, an) {
+  if (est.aberto === "sync") {
+    const partes = partesSync(p);
+    if (!partes.length) return "";
+    return `<div class="aviso-topo nao-imprime"><button type="button" class="fechar" data-acao="abrir-aviso" data-v="" title="Fechar">✕</button>${partes.join("")}</div>`;
+  }
+  if (est.aberto === "atencao") return htmlAlertas(p, an);
+  // "ninguém na escala" continua sempre visível: sem isso a tela fica vazia sem explicação
+  if (!ativos(p).length) return `<div class="aviso-topo nao-imprime">${partesSync(p).filter((x) => x.includes("Ninguém na escala")).join("")}</div>`;
+  return "";
+}
+
+function partesSync(p) {
   const s = est.sync[est.setor];
-  const p = plano();
   const fora = p.pessoas.filter((x) => x.fora);
   const partes = [];
   if (s?.novos?.length) partes.push(`<span><b>Entraram do QL:</b> ${esc(s.novos.join(", "))} — clique em Redistribuir para encaixar.</span>`);
   if (fora.length) partes.push(`<span><b>Não estão mais no quadro do Senior (fora da escala):</b> ${esc(fora.map((x) => x.nome).join(", "))}</span>`);
   if (!ativos(p).length) partes.push(`<span>Ninguém na escala em <b>${esc(infoSetor(est.setor).rotulo)}</b>${p.pessoas.length ? " (quem está aqui é ART 62 / aprendiz ou foi tirado da escala)" : ""}. Veja a aba Pessoas ou adicione uma pessoa extra.</span>`);
-  return partes.length ? `<div class="aviso-topo nao-imprime">${partes.join("")}</div>` : "";
+  return partes;
 }
 
 function htmlKpis(p, pessoas, an) {
@@ -748,7 +839,7 @@ function htmlKpis(p, pessoas, an) {
   </section>`;
 }
 
-function htmlAlertas(p, an) {
+function itensAtencao(p, an) {
   const itens = [];
   for (const pr of an.problemas) {
     const ex = pr.faixas.slice(0, 2).join(", ") + (pr.faixas.length > 2 ? "…" : "");
@@ -757,11 +848,15 @@ function htmlAlertas(p, an) {
   const porPessoa = new Map();
   for (const a of an.avisos) { if (!porPessoa.has(a.pid)) porPessoa.set(a.pid, { nome: a.nome, txt: [] }); porPessoa.get(a.pid).txt.push(a.txt); }
   for (const [, v] of porPessoa) itens.push(`<button type="button" class="alerta aviso" data-acao="visao" data-v="escala"><span class="selo">Regra</span><span><b>${esc(v.nome)}:</b> ${esc(v.txt.join(" · "))}</span></button>`);
+  return itens;
+}
+function htmlAlertas(p, an) {
+  const itens = itensAtencao(p, an);
   if (!itens.length) itens.push(`<div class="alerta ok"><span class="selo">OK</span><span>Tudo certo: cobertura acima do mínimo e todo mundo dentro das regras (2 folgas, ${p.cenario}h, até 6 dias seguidos, até ${p.domingosSeguidosMax} domingos seguidos).</span></div>`);
   const LIM = 6;
   const mostrar = est.mostrarTodosAlertas ? itens : itens.slice(0, LIM);
   return `<section class="cartao atencao">
-    <div class="atencao-cab"><h2>O que precisa de atenção</h2>${itens.length > LIM ? `<button class="btn btn-peq btn-borda nao-imprime" data-acao="mais-alertas">${est.mostrarTodosAlertas ? "Menos" : `Ver todos (${itens.length})`}</button>` : ""}</div>
+    <div class="atencao-cab"><h2>O que precisa de atenção</h2><div>${itens.length > LIM ? `<button class="btn btn-peq btn-borda nao-imprime" data-acao="mais-alertas">${est.mostrarTodosAlertas ? "Menos" : `Ver todos (${itens.length})`}</button>` : ""} <button type="button" class="fechar" data-acao="abrir-aviso" data-v="" title="Fechar">✕</button></div></div>
     <div class="alertas">${mostrar.join("")}</div>
   </section>`;
 }
@@ -988,7 +1083,7 @@ function htmlBarra() {
     return;
   }
   b.hidden = false;
-  b.innerHTML = `<span>Alterações não salvas: <b>${sujos.map((s) => infoSetor(s).rotulo).join(", ")}</b></span><button class="btn btn-primario btn-peq" id="btn-salvar" data-acao="salvar">Salvar</button>`;
+  b.innerHTML = `<span>Alterações não salvas: <b>${sujos.length > 3 ? `${sujos.length} escalas` : sujos.map((s) => infoSetor(s).rotulo).join(", ")}</b></span><button class="btn btn-primario btn-peq" id="btn-salvar" data-acao="salvar">Salvar</button>`;
 }
 
 // ============================================================
@@ -1019,6 +1114,7 @@ document.addEventListener("click", (ev) => {
   if (a === "setor") { est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); return abrirSetor(el.dataset.setor); }
   if (a === "dept") { est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); const dpt = el.dataset.dept; return abrirSetor(est.ultimoPorDept[dpt] && lerChave(est.ultimoPorDept[dpt])?.dept === dpt ? est.ultimoPorDept[dpt] : chaveSetor(dpt)); }
   if (a === "cenario") {
+    if (est.modo === "total") return toast("A jornada (44h/42h/40h) é escolhida dentro de cada departamento.");
     if (est.modo !== "escala") { ORC.cenario = +el.dataset.h; gravarLocal("escala_orc_cenario", String(ORC.cenario)); return render(); }
     return trocarCenario(+el.dataset.h);
   }
@@ -1026,6 +1122,7 @@ document.addEventListener("click", (ev) => {
   if (a === "destravar") return destravar();
   if (a === "csv") return exportarCSV();
   if (a === "semana-mapa") { est.semanaMapa = +el.dataset.w; return render(); }
+  if (a === "abrir-aviso") { const v = el.dataset.v || null; est.aberto = est.aberto === v ? null : v; return render(); }
   if (a === "mais-alertas") { est.mostrarTodosAlertas = !est.mostrarTodosAlertas; return render(); }
   if (a === "add-turno") return addTurno();
   if (a === "rm-turno") return removerTurno(el.dataset.id);

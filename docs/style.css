@@ -547,3 +547,49 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .data-br-cal { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--texto); cursor: pointer; opacity: .75; }
 .data-br-cal:hover { opacity: 1; background: color-mix(in srgb, var(--azul) 10%, transparent); }
 @media print { .data-br-cal { display: none; } }
+
+/* ---------- navegação compacta: visões + departamentos (quebram linha, sem rolagem) ---------- */
+.navegacao { margin-top: 12px; display: grid; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--borda); }
+.nav-linha { display: flex; align-items: flex-start; gap: 10px; }
+.nav-rot { flex: none; width: 104px; padding-top: 7px; font-size: .7rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--texto-fraco); }
+.seg-modos { display: flex; flex-wrap: wrap; gap: 6px; }
+.seg-modos button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid color-mix(in srgb, var(--magenta) 35%, var(--borda)); background: var(--superficie); color: var(--magenta); border-radius: 10px; padding: 6px 12px; font-weight: 700; font-size: .82rem; }
+.seg-modos button.ativo { background: var(--magenta); border-color: var(--magenta); color: #fff; }
+.depts { display: flex; flex-wrap: wrap; gap: 6px; }
+.dep { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); border-radius: 10px; padding: 6px 11px; font-weight: 600; font-size: .82rem; }
+.dep:hover { border-color: var(--azul); }
+.dep .qtd { font-size: .72rem; color: var(--texto-fraco); font-weight: 600; }
+.dep .salvo { color: var(--verde, #1a8f4c); font-weight: 800; }
+.dep.ativo { background: var(--azul); border-color: var(--azul); color: #fff; }
+.dep.ativo .qtd, .dep.ativo .salvo { color: #C9DCEC; }
+.dep-total { font-weight: 800; color: var(--azul); }
+.dep-total svg { flex: none; }
+@media (max-width: 700px) { .nav-linha { flex-direction: column; gap: 4px; } .nav-rot { width: auto; padding-top: 0; } }
+
+/* ---------- botões de aviso (! amarelo / ! vermelho) ---------- */
+.avisos-bts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.bt-aviso { position: relative; width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; font-weight: 900; font-size: 1.05rem; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.bt-aviso.amarelo { background: #F5B800; color: #3A2A00; }
+.bt-aviso.vermelho { background: var(--vermelho); color: #fff; }
+.bt-aviso.ok { background: var(--verde-claro, #E3F5EA); color: var(--verde, #1a8f4c); box-shadow: none; cursor: default; font-size: .95rem; }
+.bt-aviso.ativo { outline: 3px solid color-mix(in srgb, currentColor 25%, transparent); outline-offset: 2px; }
+.bt-aviso em { position: absolute; top: -6px; right: -8px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px; background: #fff; color: var(--vermelho); border: 1px solid var(--vermelho); font-style: normal; font-size: .66rem; font-weight: 800; display: grid; place-items: center; }
+.aviso-topo { position: relative; padding-right: 40px; }
+.fechar { border: 0; background: transparent; color: var(--texto-fraco); font-size: .95rem; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+.fechar:hover { background: var(--superficie-2); color: var(--texto); }
+.aviso-topo > .fechar { position: absolute; top: 6px; right: 6px; }
+.atencao { margin-top: 12px; }
+.atencao-cab > div { display: flex; gap: 6px; align-items: center; }
+.painel.painel-so { grid-template-columns: 1fr; }
+
+/* ---------- visão Total ---------- */
+.total-loja tr.linha-dept { cursor: pointer; }
+.total-loja tr.linha-dept:hover td { background: var(--azul-claro); }
+.total-loja td.sit { white-space: nowrap; text-align: left; padding: 0 8px; min-width: 120px; }
+.total-loja td.sit .chip + .chip { margin-left: 4px; }
+.total-loja td { font-weight: 700; font-size: .78rem; }
+.chip.ok { background: var(--verde-claro, #E3F5EA); color: var(--verde, #1a8f4c); }
+.chip.sug { background: var(--laranja-claro); color: var(--laranja); }
+.chip.ruim { background: var(--vermelho-claro); color: var(--vermelho); }
+.escala tr.total td { color: var(--azul); }
+.escala tr.total td.baixo { color: var(--vermelho); }
