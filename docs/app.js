@@ -1181,16 +1181,18 @@ function htmlHoje() {
   const dt = M.lerISO(data);
   const rel = data === hojeISO ? "Hoje" : data === M.iso(M.somaDias(M.lerISO(hojeISO), 1)) ? "Amanhã" : data === M.iso(M.somaDias(M.lerISO(hojeISO), -1)) ? "Ontem" : "";
   const fe = feriadoDe(plano(), data);
-  let totT = 0, totF = 0, totX = 0, fora = 0;
+  let totT = 0, totF = 0, totX = 0, totG = 0, fora = 0;
   const blocos = [];
   est.silencioso = true;
   try {
     for (const dp of est.estrutura) {
-      const porTurno = new Map(), folgas = [], aus = [];
+      const porTurno = new Map(), folgas = [], aus = [], gestao = [];
       let foraPeriodo = false;
       for (const k of setoresDoDept(dp.dept)) {
         const reg = garantirPlano(k), p = reg.p;
         const d = M.datasDoPlano(p).find((x) => x.iso === data);
+        // quem não entra na escala (ART 62 / gestão, aprendiz) aparece à parte, sem horário
+        for (const pe of p.pessoas) if (!pe.fora && pe.ativo === false && !gestao.some((g) => g.nome === pe.nome)) gestao.push({ nome: pe.nome, mot: pe.semEscala || "fora da escala", funcao: pe.funcao });
         if (!d) { foraPeriodo = true; continue; }
         for (const pe of ativos(p)) {
           const v = M.valor(p, pe.id, d);
@@ -1203,11 +1205,13 @@ function htmlHoje() {
         }
       }
       const n = [...porTurno.values()].reduce((a, b) => a + b.length, 0);
+      totG += gestao.length;
       totT += n; totF += folgas.length; totX += aus.length; if (foraPeriodo && !n && !folgas.length) fora++;
       const turnos = [...porTurno.entries()].sort((a, b) => Math.min(...a[1].map((x) => x.ini)) - Math.min(...b[1].map((x) => x.ini)))
         .map(([tn, xs]) => `<div class="hj-turno"><b>${esc(tn)}</b>${xs.sort((a, b) => a.ini - b.ini || a.nome.localeCompare(b.nome)).map((x) => `<div class="hj-p"><span>${esc(x.nome)}</span><small>${esc(x.h)}${x.alm ? ` · alm ${x.alm}` : ""}</small></div>`).join("")}</div>`).join("");
-      blocos.push(`<section class="cartao hj-dept"><div class="hj-cab"><h3>${esc(titulo(dp.dept))}</h3><span class="hj-n">${n} trabalhando</span></div>
-        ${turnos || `<p class="texto-fraco">${foraPeriodo ? "Fora do período da escala deste departamento." : "Ninguém trabalhando."}</p>`}
+      blocos.push(`<section class="cartao hj-dept"><div class="hj-cab"><h3>${esc(titulo(dp.dept))}</h3><span class="hj-n">${n ? `${n} trabalhando` : gestao.length ? `${gestao.length} gestão` : "0 trabalhando"}</span></div>
+        ${turnos || (gestao.length ? "" : `<p class="texto-fraco">${foraPeriodo ? "Fora do período da escala deste departamento." : "Ninguém trabalhando."}</p>`)}
+        ${gestao.length ? `<div class="hj-turno hj-gestao"><b>Sem escala de horário</b>${gestao.sort((a, b) => a.nome.localeCompare(b.nome)).map((g) => `<div class="hj-p"><span>${esc(g.nome)}</span><small>${esc(g.mot === "ART 62 CLT" ? "cargo de gestão (ART 62)" : g.mot)}</small></div>`).join("")}</div>` : ""}
         ${folgas.length ? `<div class="hj-folga"><b>Folga (${folgas.length}):</b> ${esc(folgas.sort().join(", "))}</div>` : ""}
         ${aus.length ? `<div class="hj-aus"><b>Ausente (${aus.length}):</b> ${esc(aus.sort().join(", "))}</div>` : ""}</section>`);
     }
@@ -1215,7 +1219,7 @@ function htmlHoje() {
   const nav = (dd, r) => `<button type="button" class="btn btn-peq ${M.iso(M.somaDias(M.lerISO(hojeISO), dd)) === data ? "btn-primario" : "btn-borda"}" data-acao="hoje-ir" data-d="${dd}">${r}</button>`;
   return `<section class="cartao hj-topo"><div class="hj-titulo"><h2>${rel ? `${rel} · ` : ""}${M.DOW_LONGO[dt.getUTCDay()]}, ${M.dataBR(dt)}${fe ? ` <span class="fer-tag fer-${fe.tipo}">${esc(fe.nome)}</span>` : ""}</h2>
       <div class="hj-nav nao-imprime">${nav(-1, "Ontem")}${nav(0, "Hoje")}${nav(1, "Amanhã")}<input type="date" class="ent" value="${data}" data-acao-change="hoje-data"></div></div>
-      <div class="hj-resumo"><span><b>${totT}</b> trabalhando</span><span><b>${totF}</b> de folga</span>${totX ? `<span><b>${totX}</b> ausentes</span>` : ""}</div>
+      <div class="hj-resumo"><span><b>${totT}</b> trabalhando</span><span><b>${totF}</b> de folga</span>${totX ? `<span><b>${totX}</b> ausentes</span>` : ""}${totG ? `<span title="cargo de gestão (ART 62) e aprendiz: não entram na escala de horário"><b>${totG}</b> gestão/aprendiz</span>` : ""}</div>
       <p class="sub">Pela escala de cada departamento (a salva; sem escala salva entra a sugestão automática).${fora ? ` ${fora} departamento(s) sem escala para esta data.` : ""}</p></section>
     ${htmlForaPeriodo(data, totT + totF + totX)}${htmlAvisoInicios()}<div class="hj-grade">${blocos.join("")}</div>`;
 }

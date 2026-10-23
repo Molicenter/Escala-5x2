@@ -750,3 +750,5 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .hj-folga b { color: var(--vermelho); } .hj-aus b { color: var(--texto-fraco); }
 
 .aviso-topo .alinhar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+.hj-gestao small { font-family: inherit; color: var(--azul); }
