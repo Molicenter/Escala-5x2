@@ -363,7 +363,9 @@ table.conf { width: 100%; border-collapse: collapse; font-size: .86rem; }
 .orc-cen .add.zero { background: var(--verde-claro); color: var(--verde); }
 .orc-cen > small { color: var(--texto-suave); font-size: .76rem; }
 .orc-explica { font-size: .84rem; color: var(--texto-suave); background: var(--superficie-2); border: 1px dashed var(--borda); border-radius: 10px; padding: 10px 12px; margin: 14px 0 16px; }
-.org-depts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-items: start; }
+.org-rolagem { overflow-x: auto; padding-bottom: 4px; }
+/* todos os departamentos numa linha só (cartões compactos); se não couber, rola para o lado */
+.org-depts { display: grid; grid-template-columns: repeat(var(--n, 8), minmax(98px, 1fr)); gap: 6px; align-items: start; }
 .org-col { display: grid; gap: 6px; }
 .org-dept { font-size: .74rem; font-weight: 800; text-align: center; padding: 7px 4px; border-radius: 8px 8px 0 0; letter-spacing: .03em; }
 .org-func { border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; text-align: center; background: var(--superficie); }
@@ -654,3 +656,14 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .btn-verde { background: var(--verde); color: #fff; }
 :root[data-theme="dark"] .st-enviada .st-selo { background: #3A2E10; color: #FFD27A; }
 :root[data-theme="dark"] .st-aprovada .st-selo { background: #10321F; color: #8CE3C0; }
+
+/* organograma compacto (QL Orçado x 5x2) */
+.org-col { gap: 4px; }
+.org-dept { font-size: .66rem; padding: 5px 3px; border-radius: 7px 7px 0 0; letter-spacing: .02em; line-height: 1.15; }
+.org-func { border-radius: 7px; }
+.org-func > div { font-size: .64rem; padding: 3px 3px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-func > b { font-size: .86rem; padding: 2px 4px 0; line-height: 1.2; }
+.org-func .orc-linha { gap: 2px; padding: 2px 2px 4px; }
+.org-func .orc-linha span { font-size: .58rem; padding: 0 4px; }
+.org-tot > b { padding: 2px 4px; }
+.org-func .orc-prec { font-size: .7rem; padding: 3px 2px 4px; }

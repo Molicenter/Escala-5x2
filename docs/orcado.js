@@ -263,7 +263,7 @@ function htmlOrcado() {
     <p class="orc-explica">Hoje (6x1) todo mundo faz <b>44h</b>. Para a loja continuar com as mesmas horas de trabalho: <b>pessoas × 44 ÷ nova jornada</b>.
       Em 44h o 5x2 só reorganiza as folgas — não precisa contratar, mas cada dia tem menos gente e mais horas por pessoa (a aba <b>Cobertura</b> de cada setor mostra se o horário fecha).
       O arredondamento é por loja: soma o que falta em todos os departamentos e arredonda para cima (no máximo 1 pessoa a mais que a conta exata por loja); as contratações vão para os departamentos onde a falta é maior. A fração de cada função (+0,5) mostra onde está a necessidade.</p>
-    <div class="org-depts">${colunas}</div>
+    <div class="org-rolagem"><div class="org-depts" style="--n:${c.depts.length}">${colunas}</div></div>
     <div class="org-rodape">
       <div class="org-big"><span>Total (Orçado)</span><b class="num">${c.q}</b></div>
       <div class="org-big"><span>Real (Ativos + Férias)</span><b class="num">${c.r}</b></div>
