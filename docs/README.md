@@ -1,4 +1,4 @@
-# Escala 5x2 · Molicenter — app web
+# Escala 5x2 · Molicenter — app web 
 
 Simulador e controle da escala 5x2 de todos os setores das 8 lojas.
 App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`, no mesmo modelo do QL web.
