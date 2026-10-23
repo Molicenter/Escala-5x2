@@ -268,7 +268,7 @@ function garantirPlano(k) {
   if (migrou && !est.sync[k].dsrMudou && p.pessoas.length) M.redistribuir(p, ativos(p));
   if ((est.sync[k].dsrMudou || migrou) && salvo) {
     sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
-    const o = [migrou ? "horário da loja atualizado" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
+    const o = [migrou ? "horário da loja / 8 semanas" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
     toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
   }
   est.planos[k] = { p, versao, usuario, sujo };
@@ -336,7 +336,7 @@ function novoPlano(setor, doQL, hoje) {
   const naEscala = doQL.filter((x) => !motivoSemEscala(x));
   const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
   const p = {
-    v: VERSAO_PLANO, setor, cenario, inicio, semanas: 4,
+    v: VERSAO_PLANO, setor, cenario, inicio, semanas: 8, semV: 2,
     funcionamento: funcionamentoPadrao(lojaAtual()), funcV: FUNC_V,
     domingo: { entrada: "08:00", saida: "20:00", minimo: +lojaAtual() === 30 ? 0 : Math.max(1, Math.round(n * MIN_DOM)) },
     domingosSeguidosMax: 2,
@@ -351,7 +351,9 @@ function novoPlano(setor, doQL, hoje) {
 function normalizarPlano(p, setor) {
   p.v ||= VERSAO_PLANO; p.setor = setor;
   p.cenario = M.CENARIOS[p.cenario] ? p.cenario : 42;
-  p.semanas = Math.min(8, Math.max(1, +p.semanas || 4));
+  // padrão passou de 4 para 8 semanas (~60 dias): planos que estavam no padrão antigo vão para 8
+  if (!p.semV) { if (!p.semanas || +p.semanas === 4) { p.semanas = 8; p._migrou = true; } p.semV = 2; }
+  p.semanas = Math.min(8, Math.max(1, +p.semanas || 8));
   // planos de antes do horário por loja: passam para o horário oficial da loja (e o motor redistribui)
   if ((p.funcV || 1) < FUNC_V) {
     const pesosEram = JSON.stringify(p.pesos || PESOS_PADRAO) === JSON.stringify(PESOS_PADRAO);
