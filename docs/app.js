@@ -75,6 +75,10 @@ const PESOS_PADRAO = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5 };
 const OPC_JORNADA = [240, 360, 380, 440, 480, 504, 528];
 const OPC_ALMOCO = [0, 15, 60, 75, 90, 120];
 const VERSAO_PLANO = 1;
+const JORN_V = 2;   // jornada por cenário: 44h = hoje (6x1, Excel) · 42h/40h = 5x2 com a hora a mais no dia
+// fechamento da loja (seg a sex) em minutos, para não deixar o turno maior passar da hora de fechar
+const fechaLoja = (p) => M.hm(((p && p.funcionamento) || funcionamentoPadrao(lojaAtual())).segsab?.[1] || "21:00");
+const baseTurno = (t) => ({ ...(t.hoje || { entrada: t.entrada, almoco: t.almoco, jornadaMin: 440 }), almocoMin: t.almocoMin });
 
 function toast(msg, tipo = "") {
   const t = $("#toast");
@@ -274,7 +278,7 @@ function garantirPlano(k) {
   if (migrou && !est.sync[k].dsrMudou && p.pessoas.length) M.redistribuir(p, ativos(p));
   if ((est.sync[k].dsrMudou || migrou) && salvo) {
     sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
-    const o = [migrou ? "regras novas da escala (horário da loja, 8 semanas, sem folga ter/sáb)" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
+    const o = [migrou ? "regras novas da escala (jornada por cenário: 44h como hoje, 42h/40h com mais horas por dia)" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
     if (!est.silencioso) toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
   }
   est.planos[k] = { p, versao, usuario, sujo };
@@ -299,31 +303,44 @@ function gravarRascunho(loja, setor, obj) { gravarLocal(chaveRasc(loja, setor), 
 // ============================================================
 function idPessoaQL(nome) { return "q:" + normalizar(nome); }
 
-function inferirTurnos(doQL, jornadaMin, fecha = "21:00") {
+// turnos a partir do horário de hoje (coluna "Descrição (Escala)" do Banco QL). Cada turno guarda o
+// horário de hoje em t.hoje; entrada/almoço/jornada são os do cenário (44h = hoje; 42h/40h = 5x2)
+function inferirTurnos(doQL, cenario, fecha) {
   const contagem = new Map();
   for (const x of doQL) {
     const e = M.lerEscalaSenior(x.e);
     if (!e) continue;
     const almocoMin = Math.min(120, Math.max(60, e.almocoMin));
     const k = `${e.entrada}|${e.almoco}|${almocoMin}`;
-    contagem.set(k, (contagem.get(k) || 0) + 1);
+    const c = contagem.get(k) || { n: 0, j: new Map() };
+    c.n++; c.j.set(e.jornadaMin, (c.j.get(e.jornadaMin) || 0) + 1);
+    contagem.set(k, c);
   }
-  let top = [...contagem.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k]) => k.split("|"));
-  top.sort((a, b) => M.hm(a[0]) - M.hm(b[0]));
-  if (!top.length) top = [["07:30", "11:30", "60"], ["10:00", "14:00", "60"], ["12:45", "17:00", "60"]];
-  const nomes = top.length === 1 ? ["Turno único"] : top.length === 2 ? ["Abertura", "Fechamento"]
-    : top.length === 3 ? ["Abertura", "Intermediário", "Fechamento"] : ["Abertura", "Intermediário", "Tarde", "Fechamento"];
-  // no 5x2 a jornada é maior que no 6x1: se o turno passaria do fechamento, adianta a entrada (e o almoço)
-  const limite = M.hm(fecha) + 30;
-  return top.map(([entrada, almoco, am], i) => {
-    const t = { id: "t" + (i + 1), nome: nomes[i], entrada, almoco, almocoMin: +am, jornadaMin };
-    const passa = M.saidaTurno(t) - limite;
-    // adianta em múltiplos de 15 min para não ficar com horário quebrado (ex.: 11:06)
-    const adianta = Math.ceil(passa / 15) * 15;
-    if (passa > 0) { t.entrada = M.fmtHM(Math.max(0, M.hm(entrada) - adianta)); t.almoco = M.fmtHM(Math.max(0, M.hm(almoco) - adianta)); }
-    return t;
+  let top = [...contagem.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 4).map(([k, c]) => {
+    const [entrada, almoco, am] = k.split("|");
+    const j = [...c.j.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    return { entrada, almoco, almocoMin: +am, jornadaMin: j >= 120 && j <= 600 ? j : 440 };
+  });
+  top.sort((a, b) => M.hm(a.entrada) - M.hm(b.entrada));
+  if (!top.length) top = [["07:30", "11:30"], ["10:00", "14:00"], ["12:45", "17:00"]].map(([entrada, almoco]) => ({ entrada, almoco, almocoMin: 60, jornadaMin: 440 }));
+  return top.map((b, i) => {
+    const hoje = { entrada: b.entrada, almoco: b.almoco, jornadaMin: b.jornadaMin };
+    return { id: "t" + (i + 1), nome: "", almocoMin: b.almocoMin, hoje, ...M.ajustarCenario(b, cenario, fecha) };
   }).filter((t, i, arr) => arr.findIndex((u) => Math.abs(M.hm(u.entrada) - M.hm(t.entrada)) <= 20 && Math.abs(M.saidaTurno(u) - M.saidaTurno(t)) <= 20) === i)
     .map((t, i, arr) => ({ ...t, id: "t" + (i + 1), nome: arr.length === 1 ? "Turno único" : i === 0 ? "Abertura" : i === arr.length - 1 ? "Fechamento" : arr.length === 3 ? "Intermediário" : `Intermediário ${i}` }));
+}
+
+// horário da pessoa no cenário (linha cinza embaixo do nome): no 44h é o do Excel; no 42h/40h
+// a jornada do dia aumenta (mesma entrada e almoço, sai mais tarde)
+function horarioNoCenario(p, pe) {
+  const s = pe.senior || "";
+  if (!s || +p.cenario === 44) return { txt: s, tit: s ? `Hoje (Excel): ${s}` : "" };
+  const e = M.lerEscalaSenior(s);
+  if (!e) return { txt: s, tit: s };
+  const n = M.ajustarCenario(e, p.cenario, fechaLoja(p));
+  const ent = M.hm(n.entrada), alm = M.hm(n.almoco), volta = alm + e.almocoMin, sai = ent + n.jornadaMin + e.almocoMin;
+  const txt = `5x2 ${M.fmtHM(ent)}-${M.fmtHM(alm)} ${M.fmtHM(volta)}-${M.fmtHM(sai)} · ${M.fmtDur(n.jornadaMin)}/dia${n.jornadaMin > 480 ? " ⚠" : ""}`;
+  return { txt, tit: `${p.cenario}h no 5x2: ${txt}${n.jornadaMin > 480 ? " (acima de 8h por dia)" : ""} · hoje (Excel): ${s} · ${M.fmtDur(e.jornadaMin)}/dia` };
 }
 
 function turnoParaEscala(p, escalaTxt) {
@@ -341,14 +358,15 @@ function novoPlano(setor, doQL, hoje) {
   const inicio = M.iso(M.domingoDe(hoje, true));
   const naEscala = doQL.filter((x) => !motivoSemEscala(x));
   const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
+  const func = funcionamentoPadrao(lojaAtual());
   const p = {
     v: VERSAO_PLANO, setor, cenario, inicio, semanas: 8, semV: 2, diasSemFolga: +lojaAtual() === 30 ? [] : [2, 6],
-    funcionamento: funcionamentoPadrao(lojaAtual()), funcV: FUNC_V,
+    funcionamento: func, funcV: FUNC_V, jornV: JORN_V,
     domingo: { entrada: "08:00", saida: "20:00", minimo: +lojaAtual() === 30 ? 0 : Math.max(1, Math.round(n * MIN_DOM)) },
     domingosSeguidosMax: 2,
     minimos: { geral: Math.max(1, Math.floor(n * MIN_GERAL)), faixas: [] },
     pesos: +lojaAtual() === 30 ? { ...PESOS_CD } : { ...PESOS_PADRAO },
-    turnos: inferirTurnos(naEscala, M.CENARIOS[cenario].jornadaMin),
+    turnos: inferirTurnos(naEscala, cenario, M.hm(func.segsab[1])),
     pessoas: [], grade: {}, travas: {},
   };
   return p;
@@ -376,7 +394,27 @@ function normalizarPlano(p, setor) {
   p.minimos ||= { geral: 2, faixas: [] }; p.minimos.faixas ||= [];
   p.pesos ||= { ...PESOS_PADRAO };
   p.turnos ||= []; p.pessoas ||= []; p.grade ||= {}; p.travas ||= {};
-  if (!p.turnos.length) p.turnos = inferirTurnos([], M.CENARIOS[p.cenario].jornadaMin);
+  if (!p.turnos.length) p.turnos = inferirTurnos([], p.cenario, fechaLoja(p));
+  // planos de antes da jornada por cenário: cada turno ganha o horário de hoje (o do Excel de quem
+  // está nele) e, se estava no padrão antigo (8h48/8h24/8h), passa para a jornada nova do cenário
+  if ((p.jornV || 1) < JORN_V) {
+    const fecha = fechaLoja(p);
+    for (const t of p.turnos) {
+      if (!t.hoje) {
+        const cont = new Map();
+        for (const pe of p.pessoas) {
+          if (pe.turno !== t.id || pe.fora) continue;
+          const e = M.lerEscalaSenior(pe.senior);
+          if (e) { const k = `${e.entrada}|${e.almoco}|${e.jornadaMin}`; cont.set(k, (cont.get(k) || 0) + 1); }
+        }
+        const top = [...cont.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (top) { const [en, al, j] = top[0].split("|"); t.hoje = { entrada: en, almoco: al, jornadaMin: +j >= 120 && +j <= 600 ? +j : 440 }; }
+        else t.hoje = { entrada: t.entrada, almoco: t.almoco, jornadaMin: 440 };
+      }
+      if (t.jornadaMin === M.CENARIOS[p.cenario].jornadaMin) Object.assign(t, M.ajustarCenario(baseTurno(t), p.cenario, fecha));
+    }
+    p.jornV = JORN_V; p._migrou = true;
+  }
   if (!p.inicio) p.inicio = M.iso(M.domingoDe(new Date(), true));
   return p;
 }
@@ -438,12 +476,25 @@ function setCaminho(obj, caminho, v) {
   o[ks[ks.length - 1]] = v;
 }
 
+// troca 44h / 42h / 40h: os turnos que estão no padrão do cenário passam para o novo (ajustados à mão
+// ficam) e as folgas são refeitas (1 por semana no 44h, 2 no 5x2). Ajustes da escala à mão ficam travados.
 function trocarCenario(h) {
   const p = plano();
-  const antiga = M.CENARIOS[p.cenario].jornadaMin, nova = M.CENARIOS[h].jornadaMin;
+  if (+p.cenario === +h) return;
+  const fecha = fechaLoja(p);
+  let manuais = 0;
+  p.turnos.forEach((t) => {
+    if (!t.hoje) t.hoje = { entrada: t.entrada, almoco: t.almoco, jornadaMin: 440 };
+    const velho = M.ajustarCenario(baseTurno(t), p.cenario, fecha);
+    if (t.entrada === velho.entrada && t.almoco === velho.almoco && t.jornadaMin === velho.jornadaMin) Object.assign(t, M.ajustarCenario(baseTurno(t), h, fecha));
+    else manuais++;
+  });
   p.cenario = h;
-  p.turnos.forEach((t) => { if (t.jornadaMin === antiga) t.jornadaMin = nova; });
+  M.redistribuir(p, ativos(p));
   alterou();
+  const j = M.jornadaCenario(h, 440);
+  toast(+h === 44 ? "44h: como hoje (6x1, jornada do Excel, 1 folga por semana). Escala refeita."
+    : `${h}h no 5x2: ${M.fmtDur(j)} por dia, 2 folgas por semana. Escala refeita${manuais ? ` (${manuais} turno(s) ajustado(s) à mão ficaram como estavam)` : ""}.`, "ok");
 }
 
 function clicarCelula(pid, isoData) {
@@ -494,7 +545,9 @@ function addTurno() {
   const p = plano();
   const ult = p.turnos[p.turnos.length - 1];
   const id = "t" + Date.now().toString(36);
-  p.turnos.push({ id, nome: "Novo turno", entrada: ult ? M.fmtHM(M.hm(ult.entrada) + 60) : "09:00", almoco: ult ? M.fmtHM(M.hm(ult.almoco) + 60) : "13:00", almocoMin: 60, jornadaMin: M.CENARIOS[p.cenario].jornadaMin });
+  const b = ult?.hoje || ult;
+  const hoje = { entrada: b ? M.fmtHM(M.hm(b.entrada) + 60) : "09:00", almoco: b ? M.fmtHM(M.hm(b.almoco) + 60) : "13:00", jornadaMin: ult?.hoje?.jornadaMin || 440 };
+  p.turnos.push({ id, nome: "Novo turno", almocoMin: 60, hoje, ...M.ajustarCenario({ ...hoje, almocoMin: 60 }, p.cenario, fechaLoja(p)) });
   alterou();
 }
 function removerTurno(id) {
@@ -666,6 +719,8 @@ function htmlTopo(p) {
   const orc = est.modo === "orcado" || est.modo === "painel";
   const cenAtual = orc ? ORC.cenario : p.cenario;
   const j = M.CENARIOS[cenAtual];
+  const jEsc = +cenAtual === 44 ? "do Excel (6x1)" : `${M.fmtDur(M.jornadaCenario(cenAtual, 440))}/dia`;
+  const titEsc = { 44: "44h · como hoje: 6x1, jornada do Excel, 1 folga por semana", 42: `42h · 5x2: ${M.fmtDur(M.jornadaCenario(42, 440))} por dia, 2 folgas`, 40: `40h · 5x2: ${M.fmtDur(M.jornadaCenario(40, 440))} por dia, 2 folgas` };
   const fh = (h) => (h ? `${fmtHoraPilula(h[0])}–${fmtHoraPilula(h[1])}` : "fechado");
   const fu = p.funcionamento || {};
   const sabIgual = !fu.sab || (fu.sab[0] === fu.segsab[0] && fu.sab[1] === fu.segsab[1]);
@@ -676,13 +731,13 @@ function htmlTopo(p) {
     <div class="topo-linha">
       <div class="topo-titulo"><img src="logo.png" alt=""><h1>Escala 5x2 <span class="ponto">·</span> ${seletor}</h1></div>
       <div class="pilulas">${orc ? `<span class="pilula">QL Orçado <b>x 5x2</b></span><span class="pilula">Hoje <b>6x1 · 44h</b></span><span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>` : `
-        <span class="pilula">Folgas <b>2/sem</b></span>
-        <span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>
+        <span class="pilula">Folgas <b>${M.folgasSemana(cenAtual)}/sem</b></span>
+        <span class="pilula">Jornada <b>${jEsc}</b></span>
         ${pilHor}
         <span class="pilula">Dom <b>${fh(fu.dom)}</b></span>`}
       </div>
       <div class="topo-conta">
-        <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${cenAtual === h ? "ativo" : ""}" title="${M.CENARIOS[h].rotulo}${orc ? " · conta do QL Orçado" : ""}">${h}h</button>`).join("")}</div>
+        <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${cenAtual === h ? "ativo" : ""}" title="${orc ? M.CENARIOS[h].rotulo + " · conta do QL Orçado" : titEsc[h]}">${h}h</button>`).join("")}</div>
         <div class="quem"><strong>${esc(sessao.email)}</strong>${esc(ROTULO_PERFIL[sessao.perfil] || "")}</div>
         <button class="btn btn-peq btn-vidro" data-acao="imprimir" title="Imprimir ou salvar em PDF">PDF</button>
         <button class="btn btn-peq btn-vidro" data-acao="tema" title="Tema claro/escuro">◐</button>
@@ -841,6 +896,8 @@ function htmlKpis(p, pessoas, an) {
 
 function itensAtencao(p, an) {
   const itens = [];
+  const acima8 = +p.cenario !== 44 ? p.turnos.filter((t) => t.jornadaMin > 480) : [];
+  if (acima8.length) itens.push(`<div class="alerta aviso"><span class="selo">CLT</span><span>Jornada acima de 8h por dia no ${p.cenario}h (${[...new Set(acima8.map((t) => M.fmtDur(t.jornadaMin)))].join(", ")}): precisa de acordo de compensação de horas — confirmar com o DP.</span></div>`);
   for (const pr of an.problemas) {
     const ex = pr.faixas.slice(0, 2).join(", ") + (pr.faixas.length > 2 ? "…" : "");
     itens.push(`<button type="button" class="alerta" data-acao="ir-problema" data-w="${pr.primeiraSemana}"><span class="selo">${M.DOW[pr.dow]}</span><span>falta gente em <b>${pr.semanas}/${pr.total}</b> sem. · ${esc(ex)}${pr.pior > 1 ? ` · falta até ${pr.pior}` : ""}</span></button>`);
@@ -852,7 +909,7 @@ function itensAtencao(p, an) {
 }
 function htmlAlertas(p, an) {
   const itens = itensAtencao(p, an);
-  if (!itens.length) itens.push(`<div class="alerta ok"><span class="selo">OK</span><span>Tudo certo: cobertura acima do mínimo e todo mundo dentro das regras (2 folgas, ${p.cenario}h, até 6 dias seguidos, até ${p.domingosSeguidosMax} domingos seguidos).</span></div>`);
+  if (!itens.length) itens.push(`<div class="alerta ok"><span class="selo">OK</span><span>Tudo certo: cobertura acima do mínimo e todo mundo dentro das regras (${M.folgasSemana(p.cenario)} folga(s) por semana, ${p.cenario}h, até 6 dias seguidos, até ${p.domingosSeguidosMax} domingos seguidos).</span></div>`);
   const LIM = 6;
   const mostrar = est.mostrarTodosAlertas ? itens : itens.slice(0, LIM);
   return `<section class="cartao atencao">
@@ -914,8 +971,9 @@ function htmlEscala(p, pessoas, an) {
     }).join("");
     const hs = semanasVis.map((w) => { const h = an.horas[pe.id][w]; return `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`; }).join("");
     const sub = [alm !== "—" ? `alm ${alm}` : "", pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
-    const sub2 = [pe.senior || "", textoDSR(pe)].filter(Boolean).join(" · ");
-    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(sub)}</small>${sub2 ? `<small class="senior" title="${esc(sub2)}">${esc(sub2)}</small>` : ""}</td>${cels}${hs}</tr>`;
+    const hc = horarioNoCenario(p, pe);
+    const sub2 = [hc.txt, textoDSR(pe)].filter(Boolean).join(" · ");
+    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(sub)}</small>${sub2 ? `<small class="senior" title="${esc([hc.tit, textoDSR(pe)].filter(Boolean).join(" · "))}">${esc(sub2)}</small>` : ""}</td>${cels}${hs}</tr>`;
   };
 
   // agrupa por turno; a linha do turno mostra quantos dele trabalham em cada dia
@@ -946,7 +1004,7 @@ function htmlEscala(p, pessoas, an) {
     </div>
     <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (T = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
     <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${total}${corpo}</tbody></table></div>
-    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (jornada normal)</span><span><i class="cel X">X</i>ausente (falta/férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas = jornada da pessoa · laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
+    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (jornada normal)</span><span><i class="cel X">X</i>ausente (falta/férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas = jornada da pessoa · laranja = semana sem ${M.folgasSemana(p.cenario)} folga(s) · vermelho = acima de ${p.cenario}h</span></div>
   </section>`;
 }
 
@@ -994,13 +1052,14 @@ function htmlTurnos(p) {
     <td><select class="ent" data-bind="turnos.${i}.almocoMin" data-tipo="num">${optA(t.almocoMin)}</select></td>
     <td><select class="ent" data-bind="turnos.${i}.jornadaMin" data-tipo="num">${optJ(t.jornadaMin)}</select></td>
     <td class="saida">${M.fmtHM(M.saidaTurno(t))}</td>
+    <td class="texto-fraco mono">${t.hoje ? `${t.hoje.entrada}–${M.fmtHM(M.hm(t.hoje.entrada) + t.hoje.jornadaMin + t.almocoMin)} · ${M.fmtDur(t.hoje.jornadaMin)}` : "—"}</td>
     <td class="texto-fraco">${usando(t.id)}</td>
     <td><button class="btn-x" data-acao="rm-turno" data-id="${t.id}" title="Remover turno">✕</button></td></tr>`).join("");
   const fu = p.funcionamento;
   const hor = (rot, k) => `<div class="linha-config"><b>${rot}:</b> <input type="time" class="ent hora" value="${fu[k][0]}" data-bind="funcionamento.${k}.0"> às <input type="time" class="ent hora" value="${fu[k][1]}" data-bind="funcionamento.${k}.1"></div>`;
   return `<section class="cartao">
-    <div class="cartao-cab"><div><h2>Turnos</h2><p class="sub">A saída é calculada: entrada + jornada + almoço.</p></div></div>
-    <div class="rolagem-conf"><table class="conf"><thead><tr><th>Turno</th><th>Entrada</th><th>Almoço</th><th>Duração</th><th>Jornada</th><th>Saída</th><th>Pessoas</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>
+    <div class="cartao-cab"><div><h2>Turnos</h2><p class="sub">A saída é calculada: entrada + jornada + almoço. No 44h vale o horário de hoje (Excel); no 42h/40h a jornada do dia aumenta (as horas da semana de hoje ÷ 5, até o limite do cenário) e a hora a mais entra no fim do turno.</p></div></div>
+    <div class="rolagem-conf"><table class="conf"><thead><tr><th>Turno</th><th>Entrada</th><th>Almoço</th><th>Duração</th><th>Jornada</th><th>Saída</th><th title="Horário de hoje (6x1), do Excel">Hoje</th><th>Pessoas</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>
     <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="add-turno">+ Turno</button></p>
     <h3 class="sub-titulo">Horário da loja <small class="texto-fraco">(usado no mapa de cobertura e nos mínimos — as horas de cada pessoa seguem a jornada dela)</small></h3>
     ${hor("Loja aberta seg a sex", "segsab")}

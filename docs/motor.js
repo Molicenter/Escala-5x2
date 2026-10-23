@@ -33,6 +33,26 @@
     40: { jornadaMin: 480, rotulo: "40h · 8h00 por dia" },
   };
 
+  // 44h = como hoje (6x1: 1 folga por semana, jornada do Excel); 42h e 40h = 5x2 (2 folgas)
+  const folgasSemana = (cen) => (+cen === 44 ? 1 : 2);
+  // jornada por dia no cenário a partir da jornada de hoje (6x1): as horas da semana de hoje
+  // (jornada × 6), limitadas ao cenário, divididas pelos 5 dias do 5x2. Ex.: 7h20 → 8h24 (42h) / 8h (40h)
+  function jornadaCenario(cen, jornadaHoje) {
+    const j = +jornadaHoje > 0 ? +jornadaHoje : 440;
+    if (+cen === 44) return j;
+    return Math.round(Math.min(j * 6, cen * 60) / 5);
+  }
+  // horário de hoje → horário no cenário: mesma entrada e almoço, a hora a mais entra no fim do dia;
+  // se passar de 30 min depois do fechamento da loja, adianta entrada e almoço (de 15 em 15 min)
+  function ajustarCenario(base, cen, fecha) {
+    const jornadaMin = jornadaCenario(cen, base.jornadaMin);
+    let e = hm(base.entrada), a = hm(base.almoco);
+    const fim = typeof fecha === "number" ? fecha : hm(fecha || "21:00");
+    const passa = e + jornadaMin + (+base.almocoMin || 0) - (fim + 30);
+    if (+cen !== 44 && passa > 0) { const ad = Math.min(e, Math.ceil(passa / 15) * 15); e -= ad; a = Math.max(0, a - ad); }
+    return { entrada: fmtHM(e), almoco: fmtHM(a), jornadaMin };
+  }
+
   // ---------- horas ----------
   const p2 = (n) => String(n).padStart(2, "0");
   function hm(txt) {
@@ -168,6 +188,7 @@
     const dias = datasDoPlano(p);
     const jan = janela(p);
     const limite = p.cenario * 60;
+    const alvo = folgasSemana(p.cenario);
     const porDia = dias.map((d) => {
       const cov = new Array(jan.n).fill(0), min = new Array(jan.n).fill(0);
       for (let k = 0; k < jan.n; k++) min[k] = minimoNoSlot(p, d.dow, jan.ini + k * PASSO);
@@ -220,7 +241,7 @@
           if (v === "F") { folgaSeg++; maxFolgaSeg = Math.max(maxFolgaSeg, folgaSeg); } else folgaSeg = 0;
           if (d.dow === 0) { if (v === "D") { domSeg++; maxDomSeg = Math.max(maxDomSeg, domSeg); } else domSeg = 0; }
         }
-        horas[pe.id].push({ min, folgas, aus, acima: min > limite, poucaFolga: aus === 0 && folgas < 2, muitaFolga: aus === 0 && folgas > 2 });
+        horas[pe.id].push({ min, folgas, aus, acima: min > limite, poucaFolga: aus === 0 && folgas < alvo, muitaFolga: aus === 0 && folgas > alvo });
         const h = horas[pe.id][w];
         if (h.poucaFolga) avisos.push({ pid: pe.id, nome: pe.nome, txt: `semana ${w + 1}: só ${folgas} folga(s)` });
         if (h.muitaFolga) avisos.push({ pid: pe.id, nome: pe.nome, txt: `semana ${w + 1}: ${folgas} folgas (fica abaixo das horas)` });
@@ -264,6 +285,7 @@
 
     const pesos = p.pesos || {};
     const n = pessoas.length;
+    const alvo = folgasSemana(p.cenario);   // 1 folga no 44h (6x1, como hoje), 2 no 42h/40h (5x2)
 
     for (let w = 0; w < p.semanas; w++) {
       const semana = dias.slice(w * 7, w * 7 + 7);
@@ -318,7 +340,9 @@
         if (pe.folgaFixa == null) continue;
         const d = semana.find((x) => x.dow === +pe.folgaFixa && x.dow !== 0);
         if (!d || travado(pe.id, d) || valor(p, pe.id, d) !== "T") continue;
-        if (semana.filter((x) => ["F", "X"].includes(valor(p, pe.id, x))).length >= 2) continue;
+        if (semana.filter((x) => ["F", "X"].includes(valor(p, pe.id, x))).length >= alvo) continue;
+        // 44h (1 folga): se a folga fixa deixaria mais de 6 dias seguidos antes dela, a folga vem antes (4b)
+        if (alvo === 1 && diasSeguidosAntes(pe, d) > 6) continue;
         set(pe.id, d, "F");
         for (const [a, b] of intervalos(p, pe, d.dow, "T"))
           for (let k = 0; k < jan.n; k++) { const t = jan.ini + k * PASSO; if (t >= a && t < b) cov[d.iso][k]--; }
@@ -326,11 +350,11 @@
 
       // 4b) demais folgas de seg a sáb, em 2 rodadas (1ª folga de todo mundo, depois a 2ª)
       const ordem = pessoas.map((pe, idx) => ({ pe, idx })).sort((a, b) => ((a.idx + w) % n) - ((b.idx + w) % n));
-      for (let rodada = 0; rodada < 2; rodada++) {
+      for (let rodada = 0; rodada < alvo; rodada++) {
         for (const { pe } of ordem) {
           const vs = semana.map((d) => valor(p, pe.id, d));
           const folgas = vs.filter((v) => v === "F" || v === "X").length;
-          if (folgas >= 2) continue;
+          if (folgas >= alvo) continue;
           let melhor = null, melhorNota = -Infinity;
           for (const d of semana.slice(1)) {
             if (travado(pe.id, d) || valor(p, pe.id, d) !== "T") continue;
@@ -353,7 +377,11 @@
             // mesma folga da semana passada = escala mais previsível
             if (w > 0 && valor(p, pe.id, dias[d.i - 7]) === "F") nota += 4;
             // não deixar passar de 6 dias seguidos trabalhando
-            if (diasSeguidosAntes(pe, d) > 6) nota -= 600;
+            // (no 44h/6x1 a pessoa tem 1 folga só: a folga tem de cair antes do 7º dia seguido,
+            //  vale mais que evitar terça/sábado; quanto mais dias seguidos antes, mais cedo deve cair)
+            const seg = diasSeguidosAntes(pe, d);
+            if (seg > 6) nota -= alvo === 1 ? 3000 + (seg - 6) * 1000 : 600;
+            else if (alvo === 1 && seg >= 4) nota += (seg - 3) * 30;
             // nunca juntar 3 folgas seguidas (ex.: sáb + dom + seg)
             // (só olha o que já foi decidido: dias anteriores e esta semana; o domingo seguinte
             //  conta como folga certa quando a pessoa nunca trabalha domingo ou a loja fecha)
@@ -434,7 +462,7 @@
   }
 
   window.Motor = {
-    DOW, DOW_LONGO, PASSO, GRUPOS_DIAS, CENARIOS,
+    DOW, DOW_LONGO, PASSO, GRUPOS_DIAS, CENARIOS, folgasSemana, jornadaCenario, ajustarCenario,
     hm, fmtHM, fmtDur, lerISO, iso, somaDias, dataCurta, dataBR, domingoDe,
     datasDoPlano, turnoDe, saidaTurno, intervalos, horarioDia, abertaNoDia, horarioPessoa, almocoDe, limitesAlmoco, escalonarAlmocos, minutosTrabalho, valor, trabalha,
     janela, minimoNoSlot, analisar, redistribuir, lerEscalaSenior,
