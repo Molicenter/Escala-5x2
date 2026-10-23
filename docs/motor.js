@@ -241,7 +241,7 @@
           if (v === "F") { folgaSeg++; maxFolgaSeg = Math.max(maxFolgaSeg, folgaSeg); } else folgaSeg = 0;
           if (d.dow === 0) { if (v === "D") { domSeg++; maxDomSeg = Math.max(maxDomSeg, domSeg); } else domSeg = 0; }
         }
-        horas[pe.id].push({ min, folgas, aus, acima: min > limite, poucaFolga: aus === 0 && folgas < alvo, muitaFolga: aus === 0 && folgas > alvo });
+        horas[pe.id].push({ min, folgas, aus, acima: min > limite, poucaFolga: aus === 0 && folgas < alvo, muitaFolga: alvo === 2 && aus === 0 && folgas > alvo });
         const h = horas[pe.id][w];
         if (h.poucaFolga) avisos.push({ pid: pe.id, nome: pe.nome, txt: `semana ${w + 1}: só ${folgas} folga(s)` });
         if (h.muitaFolga) avisos.push({ pid: pe.id, nome: pe.nome, txt: `semana ${w + 1}: ${folgas} folgas (fica abaixo das horas)` });
@@ -404,9 +404,74 @@
         }
       }
     }
+    // 5) garantia final: ninguém com mais de 6 dias seguidos trabalhando
+    corrigirSeguidos(p, pessoas, dias, travado, set, hDom);
     // limpa a grade de datas fora do período
     const validas = new Set(dias.map((d) => d.iso));
     for (const pid in p.grade) for (const k in p.grade[pid]) if (!validas.has(k) && !p.travas?.[pid]?.[k]) delete p.grade[pid][k];
+  }
+
+  // ---------- nunca mais de 6 dias seguidos ----------
+  // Passa pela escala de cada pessoa e, na 1ª sequência de 7+ dias trabalhando, coloca uma folga dentro
+  // dela. De preferência TROCA com uma folga da mesma semana que está fora da sequência (as horas da
+  // semana não mudam); se não der, entra uma folga a mais na semana (ex.: no 44h/6x1, quem folgou um
+  // domingo e trabalha o próximo). Evita terça/sábado, 3 folgas juntas e mexer no rodízio do domingo.
+  // Células travadas (ajuste à mão) e ausências não são mexidas.
+  const MAX_SEGUIDOS = 6;
+  function maiorSequencia(vs, ate) {
+    let c = 0, m = 0;
+    for (let i = 0; i <= ate; i++) { if (trabalha(vs[i])) { c++; if (c > m) m = c; } else c = 0; }
+    return m;
+  }
+  function corrigirSeguidos(p, pessoas, dias, travado, set, hDom) {
+    const bloq = p.diasSemFolga || [], pesos = p.pesos || {}, maxDom = p.domingosSeguidosMax || 2;
+    const folga = (v) => v === "F" || v === "X";
+    for (const pe of pessoas) {
+      for (let volta = 0; volta < dias.length; volta++) {
+        const vs = dias.map((d) => valor(p, pe.id, d));
+        let c = 0, fim = -1;
+        for (let i = 0; i < vs.length; i++) { if (trabalha(vs[i])) { if (++c > MAX_SEGUIDOS) { fim = i; break; } } else c = 0; }
+        if (fim < 0) break;
+        const ini = fim - MAX_SEGUIDOS;
+        let melhor = null, melhorNota = -Infinity;
+        for (let j = ini; j <= fim; j++) {
+          const d = dias[j];
+          if (!trabalha(vs[j]) || travado(pe.id, d)) continue;
+          if (d.dow === 0 && pe.domingo === "sempre") continue;
+          const trocas = [null];
+          for (let k = d.semana * 7; k < d.semana * 7 + 7; k++) {
+            if (k === j || (k >= ini && k <= fim) || vs[k] !== "F" || travado(pe.id, dias[k])) continue;
+            if (dias[k].dow === 0 && (!hDom || pe.domingo === "nunca")) continue;
+            trocas.push(k);
+          }
+          for (const k of trocas) {
+            const t = vs.slice();
+            t[j] = "F";
+            if (k != null) t[k] = dias[k].dow === 0 ? "D" : "T";
+            if (maiorSequencia(t, fim) > MAX_SEGUIDOS) continue;
+            let nota = 0;
+            if (k == null) nota -= 100;                                 // folga a mais na semana
+            if (k != null && dias[k].dow === 0) nota -= 150;            // muda o rodízio do domingo
+            if (d.dow === 0) nota -= 400;                               // tirar do domingo derruba o rodízio
+            if (bloq.includes(d.dow)) nota -= 60;                       // terça/sábado
+            if (k != null && dias[k].dow !== 0 && t[k] === "T" && (pe.folgaFixa === dias[k].dow)) nota -= 20;
+            if (+pe.folgaFixa === d.dow || +pe.folgaFixa2 === d.dow) nota += 20;
+            nota -= (+pesos[d.dow] || 3) * 2;                           // dia de mais movimento
+            let a = 0, b = 0;
+            for (let i = j - 1; i >= 0 && folga(t[i]); i--) a++;
+            for (let i = j + 1; i < t.length && folga(t[i]); i++) b++;
+            if (a + b + 1 >= 3) nota -= 300;                            // 3 folgas juntas
+            let ds = 0, mds = 0;
+            for (let i = 0; i < t.length; i++) if (dias[i].dow === 0) { if (t[i] === "D") { ds++; mds = Math.max(mds, ds); } else ds = 0; }
+            if (mds > maxDom) nota -= 200;
+            if (nota > melhorNota) { melhorNota = nota; melhor = { j, k }; }
+          }
+        }
+        if (!melhor) break;   // tudo travado: fica o aviso
+        set(pe.id, dias[melhor.j], "F");
+        if (melhor.k != null) set(pe.id, dias[melhor.k], dias[melhor.k].dow === 0 ? "D" : "T");
+      }
+    }
   }
 
   // ---------- escalonar almoços ----------
