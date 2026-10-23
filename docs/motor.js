@@ -183,6 +183,11 @@
     return dow === 0 ? +p.domingo.minimo || 0 : +p.minimos.geral || 0;
   }
 
+  // ---------- continuação do período anterior ----------
+  // p.cauda[pid] = como a pessoa terminou o período anterior: dias trabalhados seguidos no fim,
+  // folgas seguidas no fim e domingos seguidos trabalhados. Assim a virada de período não emenda 7 dias.
+  const caudaDe = (p, pid) => p.cauda?.[pid] || { seguidos: 0, folgasFim: 0, dom: 0 };
+
   // ---------- análise completa ----------
   function analisar(p, pessoas) {
     const dias = datasDoPlano(p);
@@ -229,7 +234,8 @@
     const horas = {}, avisos = [];
     for (const pe of pessoas) {
       horas[pe.id] = [];
-      let seguidos = 0, maxSeguidos = 0, domSeg = 0, maxDomSeg = 0, folgaSeg = 0, maxFolgaSeg = 0;
+      const cd = caudaDe(p, pe.id);
+      let seguidos = cd.seguidos || 0, maxSeguidos = 0, domSeg = cd.dom || 0, maxDomSeg = 0, folgaSeg = cd.folgasFim || 0, maxFolgaSeg = 0;
       for (let w = 0; w < p.semanas; w++) {
         let min = 0, folgas = 0, aus = 0;
         for (const d of dias.slice(w * 7, w * 7 + 7)) {
@@ -268,7 +274,7 @@
     p.grade ||= {}; p.travas ||= {};
     const maxDomSeg = p.domingosSeguidosMax || 2;
     const domContagem = {}, domSeguidos = {};
-    pessoas.forEach((pe) => { domContagem[pe.id] = 0; domSeguidos[pe.id] = 0; });
+    pessoas.forEach((pe) => { domContagem[pe.id] = 0; domSeguidos[pe.id] = caudaDe(p, pe.id).dom || 0; });
 
     // necessidade do domingo = maior mínimo dentro do horário de domingo
     const hDom = horarioDia(p, 0);
@@ -281,7 +287,7 @@
       if (!reqDom) reqDom = +p.domingo.minimo || 0;
     }
     // folga (F ou X) no dia de índice i? fora do período conta como "não sei" (false)
-    const folgaEm = (pe, i) => i >= 0 && i < dias.length && ["F", "X"].includes(valor(p, pe.id, dias[i]));
+    const folgaEm = (pe, i) => (i < 0 ? -i <= (caudaDe(p, pe.id).folgasFim || 0) : i < dias.length && ["F", "X"].includes(valor(p, pe.id, dias[i])));
 
     const pesos = p.pesos || {};
     const n = pessoas.length;
@@ -363,7 +369,9 @@
 
       const diasSeguidosAntes = (pe, d) => {
         let c = 0;
-        for (let i = d.i - 1; i >= 0; i--) { if (trabalha(valor(p, pe.id, dias[i]))) c++; else break; }
+        let i = d.i - 1;
+        for (; i >= 0; i--) { if (trabalha(valor(p, pe.id, dias[i]))) c++; else break; }
+        if (i < 0) c += caudaDe(p, pe.id).seguidos || 0;   // emenda com o fim do período anterior
         return c;
       };
 
@@ -450,8 +458,8 @@
   // domingo e trabalha o próximo). Evita terça/sábado, 3 folgas juntas e mexer no rodízio do domingo.
   // Células travadas (ajuste à mão) e ausências não são mexidas.
   const MAX_SEGUIDOS = 6;
-  function maiorSequencia(vs, ate) {
-    let c = 0, m = 0;
+  function maiorSequencia(vs, ate, c0 = 0) {
+    let c = c0, m = c0;
     for (let i = 0; i <= ate; i++) { if (trabalha(vs[i])) { c++; if (c > m) m = c; } else c = 0; }
     return m;
   }
@@ -461,10 +469,11 @@
     for (const pe of pessoas) {
       for (let volta = 0; volta < dias.length; volta++) {
         const vs = dias.map((d) => valor(p, pe.id, d));
-        let c = 0, fim = -1;
+        const c0 = caudaDe(p, pe.id).seguidos || 0;
+        let c = c0, fim = -1;
         for (let i = 0; i < vs.length; i++) { if (trabalha(vs[i])) { if (++c > MAX_SEGUIDOS) { fim = i; break; } } else c = 0; }
         if (fim < 0) break;
-        const ini = fim - MAX_SEGUIDOS;
+        const ini = Math.max(0, fim - MAX_SEGUIDOS);
         let melhor = null, melhorNota = -Infinity;
         for (let j = ini; j <= fim; j++) {
           const d = dias[j];
@@ -480,7 +489,7 @@
             const t = vs.slice();
             t[j] = "F";
             if (k != null) t[k] = dias[k].dow === 0 ? "D" : "T";
-            if (maiorSequencia(t, fim) > MAX_SEGUIDOS) continue;
+            if (maiorSequencia(t, fim, c0) > MAX_SEGUIDOS) continue;
             let nota = 0;
             if (k == null) nota -= 100;                                 // folga a mais na semana
             if (k != null && dias[k].dow === 0) nota -= 150;            // muda o rodízio do domingo
@@ -493,7 +502,7 @@
             for (let i = j - 1; i >= 0 && folga(t[i]); i--) a++;
             for (let i = j + 1; i < t.length && folga(t[i]); i++) b++;
             if (a + b + 1 >= 3) nota -= 300;                            // 3 folgas juntas
-            let ds = 0, mds = 0;
+            let ds = caudaDe(p, pe.id).dom || 0, mds = 0;
             for (let i = 0; i < t.length; i++) if (dias[i].dow === 0) { if (t[i] === "D") { ds++; mds = Math.max(mds, ds); } else ds = 0; }
             if (mds > maxDom) nota -= 200;
             if (nota > melhorNota) { melhorNota = nota; melhor = { j, k }; }

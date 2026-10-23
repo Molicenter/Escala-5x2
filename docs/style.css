@@ -720,3 +720,31 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
   table.escala tr, table.mapa tr { break-inside: avoid; }
   .status-escala, .roteiro, .visoes { display: none !important; }
 }
+
+/* ---------- trocar folga ---------- */
+.seg-troca { display: inline-flex; gap: 4px; background: var(--superficie-2); border: 1px solid var(--borda); border-radius: 12px; padding: 3px; margin: 6px 0 10px; }
+.seg-troca button { border: 0; background: none; border-radius: 9px; padding: 6px 12px; font-weight: 700; color: var(--texto-suave); }
+.seg-troca button.ativo { background: var(--azul); color: #fff; }
+.troca-campos { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.troca-campos .campo select { min-width: 190px; }
+.troca-log { font-size: .82rem; color: var(--texto-suave); margin-top: 8px; }
+.troca-log ul { margin: 4px 0 0; padding-left: 18px; }
+
+/* ---------- hoje na loja ---------- */
+.hj-topo { margin-top: 14px; }
+.hj-titulo { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+.hj-titulo h2 { margin: 0; font-size: 1.15rem; }
+.hj-nav { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.hj-resumo { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.hj-resumo span { background: var(--azul-claro); color: var(--azul); border-radius: 999px; padding: 4px 12px; font-size: .86rem; }
+.hj-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
+.hj-dept { margin: 0; padding: 12px 14px; }
+.hj-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.hj-cab h3 { margin: 0; font-size: 1rem; color: var(--azul-escuro); }
+.hj-n { font-size: .78rem; font-weight: 800; color: var(--verde); }
+.hj-turno { margin-top: 6px; }
+.hj-turno > b { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--texto-fraco); margin-bottom: 2px; }
+.hj-p { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--borda); font-size: .88rem; }
+.hj-p small { color: var(--texto-suave); font-family: var(--mono); font-size: .74rem; white-space: nowrap; }
+.hj-folga, .hj-aus { margin-top: 8px; font-size: .8rem; color: var(--texto-suave); }
+.hj-folga b { color: var(--vermelho); } .hj-aus b { color: var(--texto-fraco); }

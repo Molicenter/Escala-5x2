@@ -137,6 +137,7 @@ const MENSAGENS = {
   SETOR_INVALIDO: "Setor inválido.",
   DADOS_GRANDES: "A escala ficou grande demais para gravar. Diminua o número de semanas.",
   ESCALA_APROVADA: "Esta escala já foi aprovada pelo DP. Para mudar, o DP ou o Analista precisa reabrir.",
+  VERSAO_NAO_ENCONTRADA: "Essa versão não existe mais no histórico (o banco guarda as 30 últimas).",
   SEM_PERMISSAO_APROVAR: "Só o Departamento Pessoal ou o Analista podem aprovar a escala.",
   "Could not find the function": "O banco ainda não tem as funções da escala (falta rodar os SQL 01 e 02 da escala).",
 };
@@ -622,13 +623,42 @@ function clicarCelula(pid, isoData) {
 }
 
 function trocarModo(m) {
-  est.modo = ["orcado", "painel", "total", "aprov"].includes(m) ? m : "escala";
+  est.modo = ["orcado", "painel", "total", "aprov", "hoje"].includes(m) ? m : "escala";
   if ((est.modo === "painel" || est.modo === "aprov") && !ehDP()) est.modo = "escala";
   if (est.modo === "aprov") { APROV.dados = null; APROV.erro = null; carregarAprov(); }
   est.aberto = null;
   gravarLocal("escala_web_modo", est.modo);
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// avança para o próximo período: começa no domingo seguinte ao fim da escala atual e leva
+// como cada pessoa terminou (dias seguidos, folgas no fim, domingos seguidos) para a virada não emendar 7 dias.
+// A escala atual fica no histórico de versões quando você salvar.
+function proximoPeriodo() {
+  const p = plano(), pessoas = ativos(p);
+  const dias = M.datasDoPlano(p);
+  const fimAtual = dias[dias.length - 1].d, novoIni = M.somaDias(fimAtual, 1);
+  if (!confirm(`Gerar as próximas ${p.semanas} semanas, de ${M.dataBR(novoIni)} a ${M.dataBR(M.somaDias(novoIni, p.semanas * 7 - 1))}?\n\nA escala atual (${M.dataBR(dias[0].d)} a ${M.dataBR(fimAtual)}) fica guardada no Histórico quando você salvar. Os ajustes à mão e ausências do período atual não passam para o novo.`)) return;
+  const cauda = {};
+  for (const pe of p.pessoas) {
+    const vs = dias.map((d) => M.valor(p, pe.id, d));
+    let seguidos = 0, folgasFim = 0, dom = 0;
+    for (let i = vs.length - 1; i >= 0 && M.trabalha(vs[i]); i--) seguidos++;
+    for (let i = vs.length - 1; i >= 0 && (vs[i] === "F" || vs[i] === "X"); i--) folgasFim++;
+    for (let i = vs.length - 1; i >= 0; i--) if (dias[i].dow === 0) { if (vs[i] === "D") dom++; else break; }
+    cauda[pe.id] = { seguidos, folgasFim, dom };
+  }
+  p.periodoAnterior = { inicio: p.inicio, fim: M.iso(fimAtual) };
+  p.cauda = cauda;
+  p.inicio = M.iso(novoIni);
+  p.grade = {}; p.travas = {};
+  const ev = { s: "rascunho", por: sessao.email, em: new Date().toISOString(), obs: `Novo período a partir de ${M.dataBR(novoIni)}` };
+  p.status = ev; p.statusHist = [ev, ...(p.statusHist || [])].slice(0, 20);
+  M.redistribuir(p, pessoas);
+  est.verSemana = "todas"; est.semanaMapa = 0;
+  alterou({ status: true });
+  toast(`Escala de ${M.dataBR(novoIni)} gerada, emendando com o período anterior. Confira e clique em Salvar.`, "ok");
 }
 
 function sugerirMinimosAgora() {
@@ -840,7 +870,7 @@ function render() {
   if (est.modo !== "escala") {
     $("#lateral").innerHTML = htmlLateral();
     $("#topo").innerHTML = htmlTopo(p);
-    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : est.modo === "total" ? htmlTotal() : est.modo === "aprov" ? htmlAprov() : htmlOrcado());
+    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : est.modo === "total" ? htmlTotal() : est.modo === "aprov" ? htmlAprov() : est.modo === "hoje" ? htmlHoje() : htmlOrcado());
     htmlBarra();
     return;
   }
@@ -945,6 +975,7 @@ function tituloVisao() {
   if (est.modo === "orcado") return "QL Orçado x 5x2";
   if (est.modo === "total") return "Total da loja";
   if (est.modo === "aprov") return "Aprovações · todas as lojas";
+  if (est.modo === "hoje") return "Hoje na loja";
   return infoSetor(est.setor).rotulo;
 }
 
@@ -963,6 +994,7 @@ function htmlLateral() {
     orcado: ic('<rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/>'),
     total: ic('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
     dept: ic('<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>'),
+    hoje: ic('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 15h3"/>'),
     aprov: ic('<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'),
   };
   const total = est.estrutura.reduce((s2, x) => s2 + x.n, 0);
@@ -976,6 +1008,7 @@ function htmlLateral() {
   return `<div class="marca"><img class="marca-selo" src="logo.png" alt="Passarinho Molicenter"><div><h1>Escala 5x2</h1><p>${esc(nomeLoja(est.loja))}</p></div></div>
     <nav class="nav">
       <div class="nav-rotulo">Visões</div>
+      <button type="button" data-acao="modo" data-v="hoje" class="${m === "hoje" ? "ativo" : ""}" title="Quem trabalha, folga e falta no dia, todos os departamentos">${IC.hoje}<span>Hoje na loja</span></button>
       ${ehDP() ? `<button type="button" data-acao="modo" data-v="painel" class="${m === "painel" ? "ativo" : ""}" title="Resumo para a reunião">${IC.painel}<span>Painel da mudança</span></button>` : ""}
       <button type="button" data-acao="modo" data-v="orcado" class="${m === "orcado" ? "ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede">${IC.orcado}<span>QL Orçado x 5x2</span></button>
       <button type="button" data-acao="modo" data-v="total" class="${m === "total" ? "ativo" : ""}" title="Todos os departamentos juntos">${IC.total}<span>Total da loja</span><span class="qtd">${total}</span></button>
@@ -1095,7 +1128,160 @@ function htmlTotal() {
 }
 
 // conteúdo do botão aberto (fica embaixo da linha das funções)
+// ---------- HOJE NA LOJA: quem trabalha, folga e está ausente no dia ----------
+const HOJE = { data: null };
+function htmlHoje() {
+  const hojeISO = est.hoje ? M.iso(est.hoje) : M.iso(new Date());
+  const data = HOJE.data || hojeISO;
+  const dt = M.lerISO(data);
+  const rel = data === hojeISO ? "Hoje" : data === M.iso(M.somaDias(M.lerISO(hojeISO), 1)) ? "Amanhã" : data === M.iso(M.somaDias(M.lerISO(hojeISO), -1)) ? "Ontem" : "";
+  const fe = feriadoDe(plano(), data);
+  let totT = 0, totF = 0, totX = 0, fora = 0;
+  const blocos = [];
+  est.silencioso = true;
+  try {
+    for (const dp of est.estrutura) {
+      const porTurno = new Map(), folgas = [], aus = [];
+      let foraPeriodo = false;
+      for (const k of setoresDoDept(dp.dept)) {
+        const reg = garantirPlano(k), p = reg.p;
+        const d = M.datasDoPlano(p).find((x) => x.iso === data);
+        if (!d) { foraPeriodo = true; continue; }
+        for (const pe of ativos(p)) {
+          const v = M.valor(p, pe.id, d);
+          if (M.trabalha(v)) {
+            const t = M.turnoDe(p, pe);
+            const chave = t ? `${t.nome}` : "—";
+            if (!porTurno.has(chave)) porTurno.set(chave, []);
+            porTurno.get(chave).push({ nome: pe.nome, h: M.horarioPessoa(p, pe, d.dow, v), alm: t && t.almocoMin ? M.fmtHM(M.almocoDe(t, pe)) : "", ini: M.hm(M.horarioPessoa(p, pe, d.dow, v)), funcao: pe.funcao });
+          } else if (v === "F") folgas.push(pe.nome); else aus.push(pe.nome);
+        }
+      }
+      const n = [...porTurno.values()].reduce((a, b) => a + b.length, 0);
+      totT += n; totF += folgas.length; totX += aus.length; if (foraPeriodo && !n && !folgas.length) fora++;
+      const turnos = [...porTurno.entries()].sort((a, b) => Math.min(...a[1].map((x) => x.ini)) - Math.min(...b[1].map((x) => x.ini)))
+        .map(([tn, xs]) => `<div class="hj-turno"><b>${esc(tn)}</b>${xs.sort((a, b) => a.ini - b.ini || a.nome.localeCompare(b.nome)).map((x) => `<div class="hj-p"><span>${esc(x.nome)}</span><small>${esc(x.h)}${x.alm ? ` · alm ${x.alm}` : ""}</small></div>`).join("")}</div>`).join("");
+      blocos.push(`<section class="cartao hj-dept"><div class="hj-cab"><h3>${esc(titulo(dp.dept))}</h3><span class="hj-n">${n} trabalhando</span></div>
+        ${turnos || `<p class="texto-fraco">${foraPeriodo ? "Fora do período da escala deste departamento." : "Ninguém trabalhando."}</p>`}
+        ${folgas.length ? `<div class="hj-folga"><b>Folga (${folgas.length}):</b> ${esc(folgas.sort().join(", "))}</div>` : ""}
+        ${aus.length ? `<div class="hj-aus"><b>Ausente (${aus.length}):</b> ${esc(aus.sort().join(", "))}</div>` : ""}</section>`);
+    }
+  } finally { est.silencioso = false; }
+  const nav = (dd, r) => `<button type="button" class="btn btn-peq ${M.iso(M.somaDias(M.lerISO(hojeISO), dd)) === data ? "btn-primario" : "btn-borda"}" data-acao="hoje-ir" data-d="${dd}">${r}</button>`;
+  return `<section class="cartao hj-topo"><div class="hj-titulo"><h2>${rel ? `${rel} · ` : ""}${M.DOW_LONGO[dt.getUTCDay()]}, ${M.dataBR(dt)}${fe ? ` <span class="fer-tag fer-${fe.tipo}">${esc(fe.nome)}</span>` : ""}</h2>
+      <div class="hj-nav nao-imprime">${nav(-1, "Ontem")}${nav(0, "Hoje")}${nav(1, "Amanhã")}<input type="date" class="ent" value="${data}" data-acao-change="hoje-data"></div></div>
+      <div class="hj-resumo"><span><b>${totT}</b> trabalhando</span><span><b>${totF}</b> de folga</span>${totX ? `<span><b>${totX}</b> ausentes</span>` : ""}</div>
+      <p class="sub">Pela escala de cada departamento (a salva; sem escala salva entra a sugestão automática).${fora ? ` ${fora} departamento(s) sem escala para esta data.` : ""}</p></section>
+    <div class="hj-grade">${blocos.join("")}</div>`;
+}
+
+// ---------- troca de folga ----------
+// mover: a folga de A sai do dia "de" e vai para o dia "para"
+// trocar: A e B trocam as folgas (A folga no dia de B e B no dia de A)
+const TROCA = { modo: "mover", a: "", da: "", para: "", b: "", db: "" };
+function htmlTroca(p) {
+  const pessoas = ativos(p), dias = M.datasDoPlano(p);
+  const optP = [["", "Escolha…"], ...pessoas.map((pe) => [pe.id, pe.nome])];
+  const diasCom = (pid, quer) => [["", "Escolha…"], ...dias.filter((d) => pid && quer(M.valor(p, pid, d))).map((d) => [d.iso, `${M.DOW[d.dow]} ${M.dataCurta(d.d)}`])];
+  const folga = (v) => v === "F", trab = (v) => M.trabalha(v);
+  const sel = (campo, ops, v) => `<select class="ent" data-acao-change="troca-campo" data-campo="${campo}">${opcoes(ops, v)}</select>`;
+  const ehMover = TROCA.modo !== "trocar";
+  const campos = ehMover
+    ? `<label class="campo"><span>Pessoa</span>${sel("a", optP, TROCA.a)}</label>
+       <label class="campo"><span>Tirar a folga de</span>${sel("da", diasCom(TROCA.a, folga), TROCA.da)}</label>
+       <label class="campo"><span>Passar a folga para</span>${sel("para", diasCom(TROCA.a, trab), TROCA.para)}</label>`
+    : `<label class="campo"><span>Pessoa A</span>${sel("a", optP, TROCA.a)}</label>
+       <label class="campo"><span>Folga de A</span>${sel("da", diasCom(TROCA.a, folga), TROCA.da)}</label>
+       <label class="campo"><span>Pessoa B</span>${sel("b", optP.filter(([id]) => id !== TROCA.a), TROCA.b)}</label>
+       <label class="campo"><span>Folga de B</span>${sel("db", diasCom(TROCA.b, folga), TROCA.db)}</label>`;
+  const ult = (p.trocas || []).slice(0, 5).map((t) => `<li>${esc(fmtQuando(t.em))} · ${esc(t.por)}: ${esc(t.txt)}</li>`).join("");
+  return `<section class="cartao nao-imprime"><div class="atencao-cab"><h2>Trocar folga</h2><div><button type="button" class="fechar" data-acao="abrir-aviso" data-v="" title="Fechar">✕</button></div></div>
+    <div class="seg-troca"><button type="button" data-acao="troca-modo" data-v="mover" class="${ehMover ? "ativo" : ""}">Mudar o dia da folga</button><button type="button" data-acao="troca-modo" data-v="trocar" class="${ehMover ? "" : "ativo"}">Trocar entre duas pessoas</button></div>
+    <div class="troca-campos">${campos}<button class="btn btn-primario" data-acao="troca-aplicar">Aplicar troca</button></div>
+    <p class="sub">${ehMover ? "A pessoa trabalha no dia em que folgava e folga no dia novo." : "A folga no dia de B e B folga no dia de A (cada um trabalha no dia em que o outro folga)."} O app confere as regras e avisa o que ficou fora. A troca fica marcada como ajuste à mão.</p>
+    ${ult ? `<div class="troca-log"><b>Últimas trocas</b><ul>${ult}</ul></div>` : ""}</section>`;
+}
+function aplicarTroca() {
+  const p = plano(), dias = M.datasDoPlano(p);
+  const dia = (iso) => dias.find((d) => d.iso === iso);
+  const pe = (id) => p.pessoas.find((x) => x.id === id);
+  const set = (pid, d, v) => { (p.grade[pid] ||= {})[d.iso] = v; (p.travas[pid] ||= {})[d.iso] = true; };
+  const trab = (d) => (d.dow === 0 ? "D" : "T");
+  const A = pe(TROCA.a), dA = dia(TROCA.da);
+  if (!A || !dA) return toast("Escolha a pessoa e o dia da folga.", "aviso");
+  let envolvidos, txt, dCheck;
+  if (TROCA.modo !== "trocar") {
+    const dN = dia(TROCA.para);
+    if (!dN) return toast("Escolha o dia para onde vai a folga.", "aviso");
+    envolvidos = [A.id]; dCheck = dN;
+    var antes = { [A.id]: conferirPessoa(p, A.id, dN.iso) };
+    set(A.id, dA, trab(dA)); set(A.id, dN, "F");
+    txt = `${A.nome}: folga de ${M.DOW[dA.dow]} ${M.dataCurta(dA.d)} → ${M.DOW[dN.dow]} ${M.dataCurta(dN.d)}`;
+  } else {
+    const B = pe(TROCA.b), dB = dia(TROCA.db);
+    if (!B || !dB) return toast("Escolha a pessoa B e o dia da folga dela.", "aviso");
+    if (!M.trabalha(M.valor(p, A.id, dB)) || !M.trabalha(M.valor(p, B.id, dA))) return toast("Para trocar, cada um precisa estar trabalhando no dia da folga do outro.", "aviso");
+    envolvidos = [A.id, B.id]; dCheck = dA;
+    var antes = { [A.id]: conferirPessoa(p, A.id, dB.iso), [B.id]: conferirPessoa(p, B.id, dA.iso) };
+    set(A.id, dA, trab(dA)); set(A.id, dB, "F"); set(B.id, dB, trab(dB)); set(B.id, dA, "F");
+    txt = `${A.nome} (folga ${M.DOW[dA.dow]} ${M.dataCurta(dA.d)}) ⇄ ${B.nome} (folga ${M.DOW[dB.dow]} ${M.dataCurta(dB.d)})`;
+  }
+  const quebrou = [];
+  for (const id of envolvidos) {
+    const depois = conferirPessoa(p, id, dCheck.iso);
+    for (const t of depois.txt) if (!antes[id].txt.includes(t)) quebrou.push(`${pe(id).nome}: ${t}`);
+  }
+  for (const id of envolvidos) for (const d of dias) if (p.travas[id]?.[d.iso] && M.valor(p, id, d) === "F" && (p.diasSemFolga || []).includes(d.dow) && (d.iso === TROCA.para || d.iso === TROCA.db || d.iso === TROCA.da)) { quebrou.push(`${pe(id).nome}: folga em ${M.DOW_LONGO[d.dow].toLowerCase()} (dia forte)`); break; }
+  p.trocas = [{ em: new Date().toISOString(), por: sessao.email, txt }, ...(p.trocas || [])].slice(0, 50);
+  TROCA.da = ""; TROCA.para = ""; TROCA.db = "";
+  alterou();
+  toast(quebrou.length ? `Troca feita. Atenção · ${quebrou.join(" · ")}.` : "Troca feita, dentro das regras.", quebrou.length ? "aviso" : "ok");
+}
+
+// ---------- histórico de versões (sql/07) ----------
+const HIST = { setor: null, lista: null, erro: null };
+async function abrirHistorico() {
+  est.aberto = "hist"; HIST.setor = est.setor; HIST.lista = null; HIST.erro = null; render();
+  try { HIST.lista = await rpc("escala_web_historico", { p_token: sessao.token, p_loja: est.loja, p_setor: est.setor }); }
+  catch (e) { HIST.erro = /Could not find|escala_web_historico/.test(String(e.message)) ? "Falta rodar o sql/07_escala_historico.sql no Supabase." : e.message; }
+  render();
+}
+async function restaurarVersao(id) {
+  const v = (HIST.lista || []).find((x) => +x.id === +id);
+  if (!v || !confirm(`Restaurar a versão salva por ${v.usuario || "?"} em ${fmtQuando(v.salvo_em)}?\n\nA escala que está na tela é trocada por essa versão (a atual continua no histórico depois que você salvar).`)) return;
+  carregando(true);
+  try {
+    const dados = await rpc("escala_web_versao", { p_token: sessao.token, p_loja: est.loja, p_id: +id });
+    const k = est.setor, reg = est.planos[k];
+    const p = normalizarPlano(clonar(dados), k);
+    delete p._migrou;
+    const ev = { s: "rascunho", por: sessao.email, em: new Date().toISOString(), obs: `Restaurada a versão de ${fmtQuando(v.salvo_em)}` };
+    p.status = ev; p.statusHist = [ev, ...(p.statusHist || [])].slice(0, 20);
+    est.sync[k] = sincronizar(p, est.dados.pessoas.filter(infoSetor(k).filtro));
+    reg.p = p;
+    est.aberto = null;
+    alterou({ status: true });
+    toast("Versão restaurada. Confira e clique em Salvar para ela valer.", "ok");
+  } catch (e) { toast(traduzir(e.message), "erro"); }
+  finally { carregando(false); }
+}
+function htmlHistorico() {
+  const fechar = `<button type="button" class="fechar" data-acao="abrir-aviso" data-v="" title="Fechar">✕</button>`;
+  if (HIST.setor !== est.setor) return "";
+  const corpo = HIST.erro ? `<p class="erro">${esc(HIST.erro)}</p>`
+    : !HIST.lista ? `<p class="texto-fraco">Carregando…</p>`
+    : !HIST.lista.length ? `<p class="texto-fraco">Ainda não há versões anteriores deste setor (aparecem a partir da 2ª gravação).</p>`
+    : `<div class="rolagem-conf"><table class="conf hist-tab"><thead><tr><th>Salva em</th><th>Por</th><th>Status</th><th>Período</th><th>Jornada</th><th></th></tr></thead><tbody>${HIST.lista.map((v) => {
+        const ini = M.lerISO(v.inicio), fim = ini ? M.somaDias(ini, (+v.semanas || 1) * 7 - 1) : null;
+        return `<tr><td>${esc(fmtQuando(v.salvo_em))}</td><td>${esc(v.usuario || "")}</td><td><span class="st-selo st-${esc(v.status)}">${ROT_STATUS[v.status] || esc(v.status)}</span>${v.obs ? `<div class="texto-fraco">${esc(v.obs)}</div>` : ""}</td><td>${ini ? `${M.dataCurta(ini)}–${M.dataCurta(fim)}` : "—"}</td><td>${esc(v.cenario || "")}h</td><td><button class="btn btn-peq btn-borda" data-acao="hist-restaurar" data-id="${v.id}">Restaurar</button></td></tr>`;
+      }).join("")}</tbody></table></div>`;
+  return `<section class="cartao nao-imprime"><div class="atencao-cab"><h2>Histórico de versões · ${esc(infoSetor(est.setor).rotulo)}</h2><div>${fechar}</div></div>
+    <p class="sub">As 30 últimas gravações deste setor. Restaurar troca a escala da tela pela versão escolhida; ela só vale depois de Salvar.</p>${corpo}</section>`;
+}
+
 function htmlAberto(p, an) {
+  if (est.aberto === "hist") return htmlHistorico();
+  if (est.aberto === "troca") return htmlTroca(p);
   if (est.aberto === "sync") {
     const partes = partesSync(p);
     if (!partes.length) return "";
@@ -1246,11 +1432,14 @@ function htmlEscala(p, pessoas, an) {
         <button class="btn btn-primario" data-acao="redistribuir">Redistribuir folgas</button>
         <button class="btn btn-borda" data-acao="escalonar" title="Espalha os almoços de quem é do mesmo turno para não abrir buraco">Escalonar almoços</button>
         ${totTravas ? `<button class="btn btn-borda" data-acao="destravar" title="Remove os ajustes feitos à mão">Desfazer ajustes (${totTravas})</button>` : ""}
+        <button class="btn btn-borda" data-acao="troca-abrir" title="Mover a folga de alguém ou trocar folgas entre duas pessoas">Trocar folga</button>
+        <button class="btn btn-borda" data-acao="hist-abrir" title="Versões salvas antes (até 30) e restaurar">Histórico</button>
+        <button class="btn btn-borda" data-acao="proximo-periodo" title="Gera as próximas semanas emendando com o fim desta escala">Próximo período →</button>
         <button class="btn btn-borda" data-acao="por-pessoa" title="Imprime/salva em PDF um cartão por funcionário, para o mural ou para mandar no WhatsApp">Escala por pessoa</button>
         <button class="btn btn-borda" data-acao="csv">Planilha</button>
       </div>
     </div>
-    <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (T = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
+    <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}${p.periodoAnterior && p.cauda ? ` (emenda com ${M.dataBR(M.lerISO(p.periodoAnterior.inicio))}–${M.dataBR(M.lerISO(p.periodoAnterior.fim))})` : ""}. Clique numa célula para trocar (T = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
     <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${total}${corpo}</tbody></table></div>
     <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (jornada normal)</span><span><i class="cel X">X</i>ausente (falta/férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas = jornada da pessoa · laranja = semana sem ${M.folgasSemana(p.cenario)} folga(s) · vermelho = acima de ${p.cenario}h</span></div>
   </section>`;
@@ -1414,7 +1603,7 @@ document.addEventListener("click", (ev) => {
     est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); est.setor = setor; gravarLocal("escala_web_setor", setor);
     return loja === est.loja ? abrirSetor(setor) : carregarLoja(loja);
   }
-  const EDITA = ["sugerir-min", "redistribuir", "destravar", "add-turno", "rm-turno", "add-faixa", "rm-faixa", "add-extra", "rm-extra", "usar-dsr", "horario-padrao", "escalonar"];
+  const EDITA = ["proximo-periodo", "troca-aplicar", "hist-restaurar", "sugerir-min", "redistribuir", "destravar", "add-turno", "rm-turno", "add-faixa", "rm-faixa", "add-extra", "rm-extra", "usar-dsr", "horario-padrao", "escalonar"];
   if (est.modo === "escala" && (EDITA.includes(a) || a === "cenario") && plano() && !podeEditar(plano())) return toast(motivoBloqueio(plano()), "aviso");
   if (a === "sair") return sair(false);
   if (a === "recarregar") {
@@ -1442,6 +1631,13 @@ document.addEventListener("click", (ev) => {
   }
   if (a === "redistribuir") return redistribuirAgora();
   if (a === "sugerir-min") return sugerirMinimosAgora();
+  if (a === "proximo-periodo") return proximoPeriodo();
+  if (a === "hist-abrir") return abrirHistorico();
+  if (a === "hoje-ir") { const base = est.hoje ? M.iso(est.hoje) : M.iso(new Date()); HOJE.data = M.iso(M.somaDias(M.lerISO(base), +el.dataset.d)); return render(); }
+  if (a === "hist-restaurar") return restaurarVersao(el.dataset.id);
+  if (a === "troca-abrir") { est.aberto = est.aberto === "troca" ? null : "troca"; TROCA.modo ||= "mover"; return render(); }
+  if (a === "troca-modo") { TROCA.modo = el.dataset.v; return render(); }
+  if (a === "troca-aplicar") return aplicarTroca();
   if (a === "destravar") return destravar();
   if (a === "csv") return exportarCSV();
   if (a === "por-pessoa") return imprimirPorPessoa();
@@ -1482,7 +1678,9 @@ function salvarRascunhosTodos() {
 document.addEventListener("change", (ev) => {
   const el = ev.target;
   const ac = el.dataset.acaoChange;
-  const naoEdita = ["loja", "orc-escopo", "pn-custo", "orc-gestao", "ver-semana", "mostrar-minimo"];
+  const naoEdita = ["loja", "orc-escopo", "pn-custo", "orc-gestao", "ver-semana", "mostrar-minimo", "troca-campo", "hoje-data"];
+  if (ac === "hoje-data") { if (M.lerISO(el.value)) HOJE.data = el.value; return render(); }
+  if (ac === "troca-campo") { TROCA[el.dataset.campo] = el.value; if (el.dataset.campo === "a") { TROCA.da = ""; TROCA.para = ""; TROCA.db = ""; } if (el.dataset.campo === "b") TROCA.db = ""; return render(); }
   if (est.modo === "escala" && (el.dataset.bind || (ac && !naoEdita.includes(ac))) && plano() && !podeEditar(plano())) { toast(motivoBloqueio(plano()), "aviso"); return render(); }
   if (el.dataset.acaoChange === "loja") {
     const nova = +el.value;
@@ -1509,6 +1707,9 @@ document.addEventListener("change", (ev) => {
     const dom = M.domingoDe(d);
     if (d.getUTCDay() !== 0) toast(`A escala começa no domingo: ajustei para ${M.dataBR(dom)}.`);
     plano().inicio = M.iso(dom);
+    // mudou o início à mão: a emenda com o período anterior só vale se continuar logo depois dele
+    const pa = plano().periodoAnterior;
+    if (pa && M.iso(M.somaDias(M.lerISO(pa.fim), 1)) !== plano().inicio) { delete plano().cauda; delete plano().periodoAnterior; }
     M.redistribuir(plano(), ativos(plano()));
     return alterou();
   }
