@@ -20,7 +20,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - Imprimir / PDF e baixar planilha (CSV que abre no Excel)
 
 ## Publicar
-1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) e `sql/03_escala_orcado.sql`. Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
+1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) , `sql/03_escala_orcado.sql` e `sql/04_escala_dsr.sql` (DSR1/DSR2 do Banco QL.xlsx → folga fixa). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
 2. Subir a pasta `docs/` e o `sql/` neste repositório (pode apagar o `index.html`, `app.js` e `style.css` antigos da raiz).
 3. Settings → Pages → Branch `main`, pasta **/docs** → Save.
 

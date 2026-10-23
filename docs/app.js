@@ -40,6 +40,22 @@ function motivoSemEscala(x) {
   if (/APRENDIZ/i.test(x.f || "") || /CURSO/i.test(x.e || "")) return "Aprendiz / curso";
   return null;
 }
+// DSR1 / DSR2 do Banco QL.xlsx (os 2 principais dias de folga da pessoa) → regra da escala
+// · DSR1 = Domingo  → não trabalha domingo; o outro DSR (se for dia de semana) vira a folga fixa
+// · DSR1 = dia de semana → folga fixa nesse dia; domingo em rodízio
+// · os dois em dia de semana → 1ª folga fixa + 2ª folga preferida
+const DIA_DSR = { DOMINGO: 0, SEGUNDA: 1, TERCA: 2, QUARTA: 3, QUINTA: 4, SEXTA: 5, SABADO: 6 };
+function diaDSR(v) {
+  const k = String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/-?FEIRA/, "").trim();
+  return k in DIA_DSR ? DIA_DSR[k] : null;
+}
+function regraDSR(x) {
+  const a = diaDSR(x.d1), b = diaDSR(x.d2);
+  if (a == null && b == null) return null;
+  const sem = [a, b].filter((d) => d != null && d !== 0);
+  return { domingo: a === 0 ? "nunca" : "rodizio", folgaFixa: sem[0] ?? null, folgaFixa2: sem[1] ?? null };
+}
+const textoDSR = (pe) => (pe.dsr && pe.dsr.length ? "DSR " + pe.dsr.map((d) => M.DOW[d].slice(0, 3)).join("+") : "");
 const MIN_GERAL = 0.3, MIN_DOM = 0.25;
 const PESOS_PADRAO = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5 };
 const OPC_JORNADA = [240, 360, 380, 440, 480, 504, 528];
@@ -238,6 +254,10 @@ function garantirPlano(k) {
     toast("Recuperei alterações que não tinham sido salvas.", "ok");
   } else if (rasc) gravarRascunho(d.loja, k, null);
   est.sync[k] = sincronizar(p, doQL);
+  if (est.sync[k].dsrMudou && salvo) {
+    sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
+    toast(`Folgas fixas do DSR aplicadas em ${est.sync[k].dsrMudou} pessoa(s). Confira e clique em Salvar.`, "ok");
+  }
   est.planos[k] = { p, versao, usuario, sujo };
   return est.planos[k];
 }
@@ -333,6 +353,7 @@ function normalizarPlano(p, setor) {
 // junta o plano com o quadro atual do QL: entra quem é novo, sai quem não está mais no Senior
 function sincronizar(p, doQL) {
   const novos = [], saiu = [];
+  let dsrMudou = 0;
   const noQL = new Map(doQL.map((x) => [idPessoaQL(x.n), x]));
   const vazio = p.pessoas.length === 0;
   for (const [id, x] of noQL) {
@@ -343,6 +364,19 @@ function sincronizar(p, doQL) {
       if (!vazio) novos.push(pe.nome);
     }
     pe.sit = x.s || ""; pe.senior = x.e || ""; pe.funcao = x.f || ""; pe.fora = false;
+    // DSR do Excel: vira a regra de domingo + folga fixa, até alguém mudar à mão nesta escala
+    const r = regraDSR(x);
+    pe.dsr = [diaDSR(x.d1), diaDSR(x.d2)].filter((d) => d != null);
+    if (!pe.dsr.length) delete pe.dsr;
+    if (r) pe.dsrRegra = r; else delete pe.dsrRegra;
+    if (pe.dsrAuto === undefined && (pe.folgaFixa != null || (pe.domingo && pe.domingo !== "rodizio"))) pe.dsrAuto = false;   // já tinha ajuste manual
+    if (r && pe.dsrAuto !== false) {
+      if (pe.domingo !== r.domingo || (pe.folgaFixa ?? null) !== r.folgaFixa || (pe.folgaFixa2 ?? null) !== r.folgaFixa2) {
+        pe.domingo = r.domingo; pe.folgaFixa = r.folgaFixa; pe.folgaFixa2 = r.folgaFixa2;
+        if (!vazio) dsrMudou++;
+      }
+      pe.dsrAuto = true;
+    }
     const mot = motivoSemEscala(x); if (mot) pe.semEscala = mot; else delete pe.semEscala;
     if (/FERIAS|FÉRIAS/i.test(pe.sit)) pe.ferias = true; else delete pe.ferias;
   }
@@ -352,8 +386,8 @@ function sincronizar(p, doQL) {
   // ordem: QL por turno e nome, extras no fim
   const ordT = (pe) => p.turnos.findIndex((t) => t.id === pe.turno);
   p.pessoas.sort((a, b) => (a.origem === "extra") - (b.origem === "extra") || ordT(a) - ordT(b) || a.nome.localeCompare(b.nome));
-  if (vazio) M.redistribuir(p, ativos(p));
-  return { novos, saiu };
+  if (vazio || dsrMudou) M.redistribuir(p, ativos(p));   // ajustes à mão (bolinha rosa) continuam travados
+  return { novos, saiu, dsrMudou };
 }
 
 // ============================================================
@@ -452,6 +486,15 @@ function addExtra() {
   if (!nome) return;
   p.pessoas.push({ id: "x:" + Date.now().toString(36), nome: nome.trim(), origem: "extra", turno: p.turnos[0].id, domingo: "rodizio", folgaFixa: null, ativo: true });
   alterou();
+}
+function usarDSR(id) {
+  const p = plano();
+  const pe = p.pessoas.find((x) => x.id === id);
+  if (!pe?.dsrRegra) return;
+  Object.assign(pe, { domingo: pe.dsrRegra.domingo, folgaFixa: pe.dsrRegra.folgaFixa, folgaFixa2: pe.dsrRegra.folgaFixa2, dsrAuto: true });
+  M.redistribuir(p, ativos(p));
+  alterou();
+  toast(`${pe.nome}: domingo e folgas voltaram para o DSR.`, "ok");
 }
 function removerExtra(id) {
   const p = plano();
@@ -737,12 +780,13 @@ function htmlEscala(p, pessoas, an) {
     const alm = t && t.almocoMin ? M.fmtHM(M.almocoDe(t, pe)) : "—";
     const cels = dias.map((d) => {
       const v = M.valor(p, pe.id, d);
-      const tit = v === "T" ? `${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""} · almoço ${alm}` : v === "D" ? `Domingo ${p.domingo.entrada}–${p.domingo.saida}` : v === "F" ? "Folga" : "Ausente (férias/atestado)";
+      const tit = v === "T" ? `${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""} · almoço ${alm}` : v === "D" ? `Domingo ${p.domingo.entrada}–${p.domingo.saida}` : v === "F" ? "Folga" : "Ausente (falta/férias/atestado)";
       return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(pe.nome + " · " + M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v}</button></td>`;
     }).join("");
     const hs = semanasVis.map((w) => { const h = an.horas[pe.id][w]; return `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`; }).join("");
-    const sub = [alm !== "—" ? `alm ${alm}` : "", porFuncao && pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
-    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(sub)}</small></td>${cels}${hs}</tr>`;
+    const sub = [alm !== "—" ? `alm ${alm}` : "", pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
+    const sub2 = [pe.senior || "", textoDSR(pe)].filter(Boolean).join(" · ");
+    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(sub)}</small>${sub2 ? `<small class="senior" title="${esc(sub2)}">${esc(sub2)}</small>` : ""}</td>${cels}${hs}</tr>`;
   };
 
   // agrupa por turno; a linha do turno mostra quantos dele trabalham em cada dia
@@ -773,7 +817,7 @@ function htmlEscala(p, pessoas, an) {
     </div>
     <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (T = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
     <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${corpo}${total}</tbody></table></div>
-    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (meio período)</span><span><i class="cel X">X</i>ausente (férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas em laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
+    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (meio período)</span><span><i class="cel X">X</i>ausente (falta/férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas em laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
   </section>`;
 }
 
@@ -859,7 +903,7 @@ function htmlPessoas(p) {
   const optDom = [["rodizio", "Rodízio"], ["nunca", "Nunca"], ["sempre", "Sempre"]];
   const optFolga = [["", "—"], ...[1, 2, 3, 4, 5, 6].map((d) => [d, M.DOW_LONGO[d]])];
   const linhas = p.pessoas.map((pe, i) => {
-    if (pe.fora) return `<tr><td><b>${esc(pe.nome)}</b></td><td><span class="chip fora">fora do quadro do Senior</span></td><td colspan="6" class="texto-fraco">Não entra na escala.</td></tr>`;
+    if (pe.fora) return `<tr><td><b>${esc(pe.nome)}</b></td><td><span class="chip fora">fora do quadro do Senior</span></td><td colspan="8" class="texto-fraco">Não entra na escala.</td></tr>`;
     const chip = (pe.semEscala ? `<span class="chip fora">${esc(pe.semEscala)}</span> ` : "") + (lerChave(est.setor)?.funcao || !pe.funcao ? "" : `<span class="chip">${esc(titulo(pe.funcao))}</span> `) + (pe.origem === "extra" ? `<span class="chip extra">extra</span>` : pe.ferias ? `<span class="chip ferias">${esc(titulo(pe.sit))}</span>` : `<span class="chip">${esc(titulo(pe.sit || "Ativo"))}</span>`);
     const nome = pe.origem === "extra" ? `<input class="ent nome-in" value="${esc(pe.nome)}" data-bind="pessoas.${i}.nome">` : `<b>${esc(pe.nome)}</b>`;
     return `<tr>
@@ -869,13 +913,15 @@ function htmlPessoas(p) {
       <td>${almocoSel(p, pe, i)}</td>
       <td><select class="ent" data-bind="pessoas.${i}.domingo">${opcoes(optDom, pe.domingo)}</select></td>
       <td><select class="ent" data-bind="pessoas.${i}.folgaFixa" data-tipo="numnull">${opcoes(optFolga, pe.folgaFixa ?? "")}</select></td>
+      <td><select class="ent" data-bind="pessoas.${i}.folgaFixa2" data-tipo="numnull">${opcoes(optFolga, pe.folgaFixa2 ?? "")}</select></td>
+      <td class="texto-fraco">${pe.dsr ? `${esc(textoDSR(pe))}${pe.dsrAuto === false ? ` <button class="btn-link" data-acao="usar-dsr" data-id="${esc(pe.id)}" title="Volta domingo e folgas para o que está no DSR do Excel">usar DSR</button>` : ""}` : "—"}</td>
       <td><label class="texto-fraco"><input type="checkbox" ${pe.ativo !== false ? "checked" : ""} data-bind="pessoas.${i}.ativo" data-tipo="bool"> na escala</label></td>
       <td>${pe.origem === "extra" ? `<button class="btn-x" data-acao="rm-extra" data-id="${esc(pe.id)}" title="Remover">✕</button>` : ""}</td></tr>`;
   }).join("");
   return `<section class="cartao">
-    <div class="cartao-cab"><div><h2>Pessoas e regras</h2><p class="sub">Vêm do Quadro de Lotação (quadro do Senior: ${esc(infoSetor(est.setor).rotulo)}, ativos da loja). Escolha o turno de cada uma, a regra do domingo e, se tiver, a folga fixa. Pessoa extra = coringa, vaga em aberto ou contratação nova.</p></div>
+    <div class="cartao-cab"><div><h2>Pessoas e regras</h2><p class="sub">Vêm do Quadro de Lotação (quadro do Senior: ${esc(infoSetor(est.setor).rotulo)}, ativos da loja). Escolha o turno de cada uma, a regra do domingo e a folga fixa — já vêm preenchidas pelo DSR do Banco QL.xlsx (DSR1 Domingo = não trabalha domingo; dia de semana = folga fixa). Mudou à mão, vale o que você escolheu. Pessoa extra = coringa, vaga em aberto ou contratação nova.</p></div>
       <div class="ferramentas nao-imprime"><button class="btn btn-borda" data-acao="recarregar" title="Busca de novo o quadro do QL">Atualizar do QL</button><button class="btn btn-borda" data-acao="add-extra">+ Pessoa extra</button></div></div>
-    <div class="rolagem-conf"><table class="conf"><thead><tr><th>Nome</th><th>Situação · horário Senior</th><th>Turno</th><th>Almoço</th><th>Domingo</th><th>Folga fixa</th><th></th><th></th></tr></thead><tbody>${linhas || `<tr><td colspan="8" class="texto-fraco">Ninguém neste setor.</td></tr>`}</tbody></table></div>
+    <div class="rolagem-conf"><table class="conf"><thead><tr><th>Nome</th><th>Situação · horário Senior</th><th>Turno</th><th>Almoço</th><th>Domingo</th><th>Folga fixa</th><th title="Folga preferida quando a pessoa precisa de mais uma folga na semana">2ª folga</th><th title="Os 2 principais dias de folga (DSR1 + DSR2 do Banco QL.xlsx)">DSR</th><th></th><th></th></tr></thead><tbody>${linhas || `<tr><td colspan="10" class="texto-fraco">Ninguém neste setor.</td></tr>`}</tbody></table></div>
   </section>`;
 }
 
@@ -947,6 +993,7 @@ document.addEventListener("click", (ev) => {
   if (a === "rm-faixa") { plano().minimos.faixas.splice(+el.dataset.i, 1); return alterou(); }
   if (a === "add-extra") return addExtra();
   if (a === "rm-extra") return removerExtra(el.dataset.id);
+  if (a === "usar-dsr") return usarDSR(el.dataset.id);
   if (a === "salvar") return salvar();
   if (a === "visao") { est.aba = el.dataset.v; gravarLocal("escala_web_aba", est.aba); render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" }); }
   if (a === "ir-problema") { est.aba = "cobertura"; est.semanaMapa = +el.dataset.w || 0; render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" }); }
@@ -1010,6 +1057,8 @@ document.addEventListener("change", (ev) => {
   if (tipo === "bool") v = !!el.checked;
   if (el.type === "time" && !v) return render();
   setCaminho(plano(), bind, v);
+  const mDsr = bind.match(/^pessoas\.(\d+)\.(domingo|folgaFixa|folgaFixa2)$/);
+  if (mDsr) plano().pessoas[+mDsr[1]].dsrAuto = false;
   alterou();
 });
 

@@ -527,3 +527,7 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .painel-mudanca { grid-template-columns: minmax(0, 1fr); }
 .pn-duas > * { min-width: 0; }
 .pn-capa > div:first-child { min-width: 0; }
+
+/* nome na escala: 2ª linha com o horário do Senior + DSR */
+.escala .col-nome small.senior { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .62rem; opacity: .85; }
+.btn-link { background: none; border: 0; padding: 0; color: var(--magenta); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }

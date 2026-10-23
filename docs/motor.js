@@ -7,7 +7,7 @@
 //   T = trabalha (dia de semana, no turno da pessoa)
 //   D = trabalha no domingo (horário curto do domingo)
 //   F = folga
-//   X = ausente (férias, atestado, afastamento) — não conta como folga nem como trabalho
+//   X = ausente (falta, férias, atestado, afastamento) — não conta como folga nem como trabalho
 // ============================================================
 (function () {
   const DOW = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
@@ -271,7 +271,18 @@
         return c;
       };
 
-      // 4) folgas de seg a sáb, em 2 rodadas (1ª folga de todo mundo, depois a 2ª)
+      // 4a) folga fixa (DSR ou escolhida na tela Pessoas): entra primeiro, no dia dela
+      for (const pe of pessoas) {
+        if (pe.folgaFixa == null) continue;
+        const d = semana.find((x) => x.dow === +pe.folgaFixa && x.dow !== 0);
+        if (!d || travado(pe.id, d) || valor(p, pe.id, d) !== "T") continue;
+        if (semana.filter((x) => ["F", "X"].includes(valor(p, pe.id, x))).length >= 2) continue;
+        set(pe.id, d, "F");
+        for (const [a, b] of intervalos(p, pe, d.dow, "T"))
+          for (let k = 0; k < jan.n; k++) { const t = jan.ini + k * PASSO; if (t >= a && t < b) cov[d.iso][k]--; }
+      }
+
+      // 4b) demais folgas de seg a sáb, em 2 rodadas (1ª folga de todo mundo, depois a 2ª)
       const ordem = pessoas.map((pe, idx) => ({ pe, idx })).sort((a, b) => ((a.idx + w) % n) - ((b.idx + w) % n));
       for (let rodada = 0; rodada < 2; rodada++) {
         for (const { pe } of ordem) {
@@ -294,6 +305,7 @@
             }
             let nota = -deficit * 60 + (nSlots ? (sobra / nSlots) * 6 : 0) - (+pesos[d.dow] || 3) * 5;
             if (pe.folgaFixa && +pe.folgaFixa === d.dow) nota += 400;
+            if (pe.folgaFixa2 && +pe.folgaFixa2 === d.dow) nota += 300;   // 2ª folga preferida (DSR2)
             // mesma folga da semana passada = escala mais previsível
             if (w > 0 && valor(p, pe.id, dias[d.i - 7]) === "F") nota += 4;
             // não deixar passar de 6 dias seguidos trabalhando
