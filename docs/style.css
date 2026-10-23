@@ -531,3 +531,8 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 /* nome na escala: 2ª linha com o horário do Senior + DSR */
 .escala .col-nome small.senior { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .62rem; opacity: .85; }
 .btn-link { background: none; border: 0; padding: 0; color: var(--magenta); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; }
+
+/* linha "Trabalhando no dia" logo abaixo dos dias */
+.escala tr.total.topo td { border-bottom: 2px solid var(--azul); }
+.cartao .sub-titulo { font-size: .9rem; margin: 18px 0 4px; color: var(--azul); }
+.cartao .sub-titulo small { font-weight: 500; font-size: .75rem; }

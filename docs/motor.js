@@ -5,7 +5,7 @@
 //
 // Valores de cada célula da escala:
 //   T = trabalha (dia de semana, no turno da pessoa)
-//   D = trabalha no domingo (horário curto do domingo)
+//   D = trabalha no domingo (jornada normal da pessoa, encaixada no horário de domingo da loja)
 //   F = folga
 //   X = ausente (falta, férias, atestado, afastamento) — não conta como folga nem como trabalho
 // ============================================================
@@ -77,19 +77,44 @@
   }
   function saidaTurno(t) { return hm(t.entrada) + t.jornadaMin + t.almocoMin; }
 
+  // horário da loja no dia: [abre, fecha] em minutos, ou null se fechada (ex.: CD no domingo)
+  function horarioDia(p, dow) {
+    const f = p.funcionamento || {};
+    const h = dow === 0 ? f.dom : dow === 6 ? (f.sab || f.segsab) : f.segsab;
+    if (!h || !h[0] || !h[1]) return null;
+    const a = hm(h[0]), b = hm(h[1]);
+    return b > a ? [a, b] : null;
+  }
+  const abertaNoDia = (p, dow) => !!horarioDia(p, dow);
+
+  // deslocamento do turno no domingo: a pessoa faz a jornada inteira dela, mas se o turno passa
+  // da hora que a loja fecha no domingo, ele é puxado para mais cedo (sem começar antes de abrir)
+  function deslocDomingo(p, t) {
+    const h = horarioDia(p, 0);
+    if (!h || !t) return 0;
+    const e = hm(t.entrada), fim = saidaTurno(t);
+    if (fim <= h[1]) return 0;
+    return -Math.min(fim - h[1], Math.max(0, e - h[0]));
+  }
+
   // intervalos [ini, fim) em minutos em que a pessoa está no posto
   function intervalos(p, pessoa, dow, valor) {
-    if (valor === "D" && dow === 0) {
-      const a = hm(p.domingo.entrada), b = hm(p.domingo.saida);
-      return b > a ? [[a, b]] : [];
-    }
-    if (valor !== "T" || dow === 0) return [];
+    const domingo = valor === "D" && dow === 0;
+    if (!domingo && (valor !== "T" || dow === 0)) return [];
     const t = turnoDe(p, pessoa);
     if (!t) return [];
-    const e = hm(t.entrada), fim = saidaTurno(t);
-    const a = almocoDe(t, pessoa), b = a + t.almocoMin;
+    const sh = domingo ? deslocDomingo(p, t) : 0;
+    const e = hm(t.entrada) + sh, fim = saidaTurno(t) + sh;
+    const a = almocoDe(t, pessoa) + sh, b = a + t.almocoMin;
     if (t.almocoMin > 0 && a > e && b < fim) return [[e, a], [b, fim]];
     return [[e, fim]];
+  }
+  // entrada–saída da pessoa no dia (para mostrar)
+  function horarioPessoa(p, pessoa, dow, valor) {
+    const t = turnoDe(p, pessoa);
+    if (!t) return "";
+    const sh = valor === "D" && dow === 0 ? deslocDomingo(p, t) : 0;
+    return `${fmtHM(hm(t.entrada) + sh)}–${fmtHM(saidaTurno(t) + sh)}`;
   }
   // almoço da pessoa = almoço do turno + ajuste individual (para escalonar quem é do mesmo turno)
   function almocoDe(t, pessoa) { return hm(t.almoco) + (+pessoa?.almocoAjuste || 0); }
@@ -98,9 +123,9 @@
     const e = hm(t.entrada), fim = saidaTurno(t);
     return { min: e + 120, max: fim - 60 - t.almocoMin };
   }
+  // horas do dia = jornada da pessoa (turno), não o horário de funcionamento da loja
   function minutosTrabalho(p, pessoa, dow, valor) {
-    if (valor === "D" && dow === 0) return Math.max(0, hm(p.domingo.saida) - hm(p.domingo.entrada));
-    if (valor === "T" && dow !== 0) { const t = turnoDe(p, pessoa); return t ? t.jornadaMin : 0; }
+    if ((valor === "D" && dow === 0) || (valor === "T" && dow !== 0)) { const t = turnoDe(p, pessoa); return t ? t.jornadaMin : 0; }
     return 0;
   }
 
@@ -115,15 +140,17 @@
 
   // ---------- janela do mapa e mínimos ----------
   function janela(p) {
-    let a = Math.min(hm(p.funcionamento.segsab[0]), hm(p.funcionamento.dom[0]), hm(p.domingo.entrada));
-    let b = Math.max(hm(p.funcionamento.segsab[1]), hm(p.funcionamento.dom[1]), hm(p.domingo.saida));
+    let a = 24 * 60, b = 0;
+    for (const dw of [0, 1, 6]) { const h = horarioDia(p, dw); if (h) { a = Math.min(a, h[0]); b = Math.max(b, h[1]); } }
     for (const t of p.turnos) { a = Math.min(a, hm(t.entrada)); b = Math.max(b, saidaTurno(t)); }
+    if (a >= b) { a = 8 * 60; b = 18 * 60; }
     a = Math.floor(a / 60) * 60; b = Math.ceil(b / 60) * 60;
     if (b <= a) b = a + 60;
     return { ini: a, fim: Math.min(b, 24 * 60), n: Math.max(1, Math.round((Math.min(b, 1440) - a) / PASSO)) };
   }
 
   function minimoNoSlot(p, dow, t) {
+    if (!abertaNoDia(p, dow)) return 0;
     let melhor = null;
     for (const f of p.minimos.faixas) {
       const g = GRUPOS_DIAS[f.dias];
@@ -131,8 +158,8 @@
       if (t >= hm(f.de) && t < hm(f.ate)) melhor = Math.max(melhor ?? 0, +f.min || 0);
     }
     if (melhor != null) return melhor;
-    const fh = dow === 0 ? p.funcionamento.dom : p.funcionamento.segsab;
-    if (t < hm(fh[0]) || t >= hm(fh[1])) return 0;
+    const fh = horarioDia(p, dow);
+    if (!fh || t < fh[0] || t >= fh[1]) return 0;
     return dow === 0 ? +p.domingo.minimo || 0 : +p.minimos.geral || 0;
   }
 
@@ -181,7 +208,7 @@
     const horas = {}, avisos = [];
     for (const pe of pessoas) {
       horas[pe.id] = [];
-      let seguidos = 0, maxSeguidos = 0, domSeg = 0, maxDomSeg = 0;
+      let seguidos = 0, maxSeguidos = 0, domSeg = 0, maxDomSeg = 0, folgaSeg = 0, maxFolgaSeg = 0;
       for (let w = 0; w < p.semanas; w++) {
         let min = 0, folgas = 0, aus = 0;
         for (const d of dias.slice(w * 7, w * 7 + 7)) {
@@ -190,6 +217,7 @@
           if (v === "F") folgas++;
           if (v === "X") aus++;
           if (trabalha(v)) { seguidos++; maxSeguidos = Math.max(maxSeguidos, seguidos); } else seguidos = 0;
+          if (v === "F") { folgaSeg++; maxFolgaSeg = Math.max(maxFolgaSeg, folgaSeg); } else folgaSeg = 0;
           if (d.dow === 0) { if (v === "D") { domSeg++; maxDomSeg = Math.max(maxDomSeg, domSeg); } else domSeg = 0; }
         }
         horas[pe.id].push({ min, folgas, aus, acima: min > limite, poucaFolga: aus === 0 && folgas < 2, muitaFolga: aus === 0 && folgas > 2 });
@@ -198,6 +226,7 @@
         if (h.muitaFolga) avisos.push({ pid: pe.id, nome: pe.nome, txt: `semana ${w + 1}: ${folgas} folgas (fica abaixo das horas)` });
         if (h.acima) avisos.push({ pid: pe.id, nome: pe.nome, txt: `semana ${w + 1}: ${fmtDur(min)}, acima de ${p.cenario}h` });
       }
+      if (maxFolgaSeg >= 3) avisos.push({ pid: pe.id, nome: pe.nome, txt: `${maxFolgaSeg} folgas seguidas (máx. 2)` });
       if (maxSeguidos > 6) avisos.push({ pid: pe.id, nome: pe.nome, txt: `${maxSeguidos} dias seguidos sem folga (máx. 6)` });
       if (maxDomSeg > (p.domingosSeguidosMax || 2)) avisos.push({ pid: pe.id, nome: pe.nome, txt: `${maxDomSeg} domingos seguidos (máx. ${p.domingosSeguidosMax || 2})` });
     }
@@ -221,12 +250,17 @@
     pessoas.forEach((pe) => { domContagem[pe.id] = 0; domSeguidos[pe.id] = 0; });
 
     // necessidade do domingo = maior mínimo dentro do horário de domingo
+    const hDom = horarioDia(p, 0);
     let reqDom = 0;
-    for (let k = 0; k < jan.n; k++) {
-      const t = jan.ini + k * PASSO;
-      if (t >= hm(p.domingo.entrada) && t < hm(p.domingo.saida)) reqDom = Math.max(reqDom, minimoNoSlot(p, 0, t));
+    if (hDom) {
+      for (let k = 0; k < jan.n; k++) {
+        const t = jan.ini + k * PASSO;
+        if (t >= hDom[0] && t < hDom[1]) reqDom = Math.max(reqDom, minimoNoSlot(p, 0, t));
+      }
+      if (!reqDom) reqDom = +p.domingo.minimo || 0;
     }
-    if (!reqDom) reqDom = +p.domingo.minimo || 0;
+    // folga (F ou X) no dia de índice i? fora do período conta como "não sei" (false)
+    const folgaEm = (pe, i) => i >= 0 && i < dias.length && ["F", "X"].includes(valor(p, pe.id, dias[i]));
 
     const pesos = p.pesos || {};
     const n = pessoas.length;
@@ -243,12 +277,15 @@
       pessoas.forEach((pe, idx) => {
         const v = valor(p, pe.id, dom);
         if (travado(pe.id, dom)) { if (v === "D") escalados++; return; }
-        if (pe.domingo === "nunca") return;
+        if (!hDom || pe.domingo === "nunca") return;
         if (pe.domingo === "sempre") { set(pe.id, dom, "D"); escalados++; return; }
         livres.push({ pe, idx });
       });
+      // folgar neste domingo juntaria 3 folgas (sábado de folga antes + folga fixa na segunda)? vai trabalhar primeiro
+      const risco3 = (pe) => (folgaEm(pe, dom.i - 1) && +pe.folgaFixa === 1 ? 1 : 0);
       livres.sort((a, b) =>
         ((domSeguidos[a.pe.id] >= maxDomSeg) - (domSeguidos[b.pe.id] >= maxDomSeg)) ||
+        (risco3(b.pe) - risco3(a.pe)) ||
         (domContagem[a.pe.id] - domContagem[b.pe.id]) ||
         (((a.idx - w) % n + n) % n - (((b.idx - w) % n + n) % n)));
       for (const { pe } of livres) { if (escalados >= reqDom) break; set(pe.id, dom, "D"); escalados++; }
@@ -310,6 +347,17 @@
             if (w > 0 && valor(p, pe.id, dias[d.i - 7]) === "F") nota += 4;
             // não deixar passar de 6 dias seguidos trabalhando
             if (diasSeguidosAntes(pe, d) > 6) nota -= 600;
+            // nunca juntar 3 folgas seguidas (ex.: sáb + dom + seg)
+            // (só olha o que já foi decidido: dias anteriores e esta semana; o domingo seguinte
+            //  conta como folga certa quando a pessoa nunca trabalha domingo ou a loja fecha)
+            let antes = 0, depois = 0;
+            for (let i = d.i - 1; folgaEm(pe, i); i--) antes++;
+            for (let i = d.i + 1; i <= w * 7 + 6 && folgaEm(pe, i); i++) depois++;
+            const domCertoF = !hDom || pe.domingo === "nunca";
+            if (d.dow === 6 && domCertoF) depois += 1 + (+pe.folgaFixa === 1 ? 1 : 0);
+            if (antes + depois + 1 >= 3) nota -= 800;
+            // sábado com folga fixa na segunda: se folgar o próximo domingo, juntaria 3
+            else if (d.dow === 6 && +pe.folgaFixa === 1 && pe.domingo !== "sempre") nota -= 150;
             // evita colar duas folgas da semana no mesmo dia vizinho sem necessidade (espalha)
             if (valor(p, pe.id, dias[d.i - 1]) === "F" || (dias[d.i + 1] && valor(p, pe.id, dias[d.i + 1]) === "F")) nota -= 1;
             if (nota > melhorNota) { melhorNota = nota; melhor = d; }
@@ -381,7 +429,7 @@
   window.Motor = {
     DOW, DOW_LONGO, PASSO, GRUPOS_DIAS, CENARIOS,
     hm, fmtHM, fmtDur, lerISO, iso, somaDias, dataCurta, dataBR, domingoDe,
-    datasDoPlano, turnoDe, saidaTurno, intervalos, almocoDe, limitesAlmoco, escalonarAlmocos, minutosTrabalho, valor, trabalha,
+    datasDoPlano, turnoDe, saidaTurno, intervalos, horarioDia, abertaNoDia, horarioPessoa, almocoDe, limitesAlmoco, escalonarAlmocos, minutosTrabalho, valor, trabalha,
     janela, minimoNoSlot, analisar, redistribuir, lerEscalaSenior,
   };
 })();

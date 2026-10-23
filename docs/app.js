@@ -56,6 +56,16 @@ function regraDSR(x) {
   return { domingo: a === 0 ? "nunca" : "rodizio", folgaFixa: sem[0] ?? null, folgaFixa2: sem[1] ?? null };
 }
 const textoDSR = (pe) => (pe.dsr && pe.dsr.length ? "DSR " + pe.dsr.map((d) => M.DOW[d].slice(0, 3)).join("+") : "");
+// horário de funcionamento por loja (out/2026). dom: null = não abre no domingo
+const FUNC_V = 2;
+function funcionamentoPadrao(loja) {
+  const l = +loja;
+  if (l === 30) return { segsab: ["08:00", "18:00"], sab: ["08:00", "12:00"], dom: null };   // CD: seg a sex 8–18, sáb 8–12
+  if (l === 8) return { segsab: ["08:00", "22:00"], sab: ["08:00", "22:00"], dom: ["08:00", "20:00"] };
+  return { segsab: ["08:00", "21:00"], sab: ["08:00", "21:00"], dom: ["08:00", "20:00"] };   // Lojas 01 a 07
+}
+const PESOS_CD = { 1: 3, 2: 3, 3: 3, 4: 3, 5: 3, 6: 1 };   // CD: sábado é meio período, folga cai lá primeiro
+const lojaAtual = () => est.dados?.loja ?? est.loja;
 const MIN_GERAL = 0.3, MIN_DOM = 0.25;
 const PESOS_PADRAO = { 1: 2, 2: 2, 3: 3, 4: 3, 5: 4, 6: 5 };
 const OPC_JORNADA = [240, 360, 380, 440, 480, 504, 528];
@@ -253,10 +263,13 @@ function garantirPlano(k) {
     p = normalizarPlano(rasc.p, k); sujo = true;
     toast("Recuperei alterações que não tinham sido salvas.", "ok");
   } else if (rasc) gravarRascunho(d.loja, k, null);
+  const migrou = !!p._migrou; delete p._migrou;
   est.sync[k] = sincronizar(p, doQL);
-  if (est.sync[k].dsrMudou && salvo) {
+  if (migrou && !est.sync[k].dsrMudou && p.pessoas.length) M.redistribuir(p, ativos(p));
+  if ((est.sync[k].dsrMudou || migrou) && salvo) {
     sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
-    toast(`Folgas fixas do DSR aplicadas em ${est.sync[k].dsrMudou} pessoa(s). Confira e clique em Salvar.`, "ok");
+    const o = [migrou ? "horário da loja atualizado" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
+    toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
   }
   est.planos[k] = { p, versao, usuario, sujo };
   return est.planos[k];
@@ -324,11 +337,11 @@ function novoPlano(setor, doQL, hoje) {
   const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
   const p = {
     v: VERSAO_PLANO, setor, cenario, inicio, semanas: 4,
-    funcionamento: { segsab: ["08:00", "21:00"], dom: ["08:00", "12:00"] },
-    domingo: { entrada: "07:45", saida: "12:15", minimo: Math.max(1, Math.round(n * MIN_DOM)) },
+    funcionamento: funcionamentoPadrao(lojaAtual()), funcV: FUNC_V,
+    domingo: { entrada: "08:00", saida: "20:00", minimo: +lojaAtual() === 30 ? 0 : Math.max(1, Math.round(n * MIN_DOM)) },
     domingosSeguidosMax: 2,
     minimos: { geral: Math.max(1, Math.floor(n * MIN_GERAL)), faixas: [] },
-    pesos: { ...PESOS_PADRAO },
+    pesos: +lojaAtual() === 30 ? { ...PESOS_CD } : { ...PESOS_PADRAO },
     turnos: inferirTurnos(naEscala, M.CENARIOS[cenario].jornadaMin),
     pessoas: [], grade: {}, travas: {},
   };
@@ -339,7 +352,15 @@ function normalizarPlano(p, setor) {
   p.v ||= VERSAO_PLANO; p.setor = setor;
   p.cenario = M.CENARIOS[p.cenario] ? p.cenario : 42;
   p.semanas = Math.min(8, Math.max(1, +p.semanas || 4));
-  p.funcionamento ||= { segsab: ["08:00", "21:00"], dom: ["08:00", "12:00"] };
+  // planos de antes do horário por loja: passam para o horário oficial da loja (e o motor redistribui)
+  if ((p.funcV || 1) < FUNC_V) {
+    const pesosEram = JSON.stringify(p.pesos || PESOS_PADRAO) === JSON.stringify(PESOS_PADRAO);
+    p.funcionamento = funcionamentoPadrao(lojaAtual()); p.funcV = FUNC_V;
+    if (+lojaAtual() === 30) { if (pesosEram) p.pesos = { ...PESOS_CD }; if (p.domingo) p.domingo.minimo = 0; }
+    p._migrou = true;
+  }
+  p.funcionamento ||= funcionamentoPadrao(lojaAtual());
+  if (p.funcionamento.sab === undefined) p.funcionamento.sab = [...p.funcionamento.segsab];
   p.domingo ||= { entrada: "08:00", saida: "12:00", minimo: 2 };
   p.domingosSeguidosMax ||= 2;
   p.minimos ||= { geral: 2, faixas: [] }; p.minimos.faixas ||= [];
@@ -634,15 +655,20 @@ function htmlTopo(p) {
   const orc = est.modo !== "escala";
   const cenAtual = orc ? ORC.cenario : p.cenario;
   const j = M.CENARIOS[cenAtual];
-  const dom = `${fmtHoraPilula(p.domingo.entrada)}–${fmtHoraPilula(p.domingo.saida)}`;
+  const fh = (h) => (h ? `${fmtHoraPilula(h[0])}–${fmtHoraPilula(h[1])}` : "fechado");
+  const fu = p.funcionamento || {};
+  const sabIgual = !fu.sab || (fu.sab[0] === fu.segsab[0] && fu.sab[1] === fu.segsab[1]);
+  const pilHor = sabIgual
+    ? `<span class="pilula">Seg–sáb <b>${fh(fu.segsab)}</b></span>`
+    : `<span class="pilula">Seg–sex <b>${fh(fu.segsab)}</b></span><span class="pilula">Sáb <b>${fh(fu.sab)}</b></span>`;
   return `<div class="topo-in">
     <div class="topo-linha">
       <div class="topo-titulo"><img src="logo.png" alt=""><h1>Escala 5x2 <span class="ponto">·</span> ${seletor}</h1></div>
       <div class="pilulas">${orc ? `<span class="pilula">QL Orçado <b>x 5x2</b></span><span class="pilula">Hoje <b>6x1 · 44h</b></span><span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>` : `
         <span class="pilula">Folgas <b>2/sem</b></span>
         <span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>
-        <span class="pilula">Seg–sáb <b>${fmtHoraPilula(p.funcionamento.segsab[0])}–${fmtHoraPilula(p.funcionamento.segsab[1])}</b></span>
-        <span class="pilula">Dom <b>${dom}</b></span>`}
+        ${pilHor}
+        <span class="pilula">Dom <b>${fh(fu.dom)}</b></span>`}
       </div>
       <div class="topo-conta">
         <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${cenAtual === h ? "ativo" : ""}" title="${M.CENARIOS[h].rotulo}${orc ? " · conta do QL Orçado" : ""}">${h}h</button>`).join("")}</div>
@@ -780,7 +806,7 @@ function htmlEscala(p, pessoas, an) {
     const alm = t && t.almocoMin ? M.fmtHM(M.almocoDe(t, pe)) : "—";
     const cels = dias.map((d) => {
       const v = M.valor(p, pe.id, d);
-      const tit = v === "T" ? `${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""} · almoço ${alm}` : v === "D" ? `Domingo ${p.domingo.entrada}–${p.domingo.saida}` : v === "F" ? "Folga" : "Ausente (falta/férias/atestado)";
+      const tit = v === "T" ? `${t?.entrada}–${t ? M.fmtHM(M.saidaTurno(t)) : ""} · almoço ${alm}` : v === "D" ? `Domingo ${M.horarioPessoa(p, pe, 0, "D")}` : v === "F" ? "Folga" : "Ausente (falta/férias/atestado)";
       return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(pe.nome + " · " + M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v}</button></td>`;
     }).join("");
     const hs = semanasVis.map((w) => { const h = an.horas[pe.id][w]; return `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`; }).join("");
@@ -799,7 +825,7 @@ function htmlEscala(p, pessoas, an) {
     corpo += grupo.map(linhaPessoa).join("");
   }
   const totalDias = an.porDia.filter((x) => semanasVis.includes(x.semana));
-  const total = `<tr class="total"><td class="col-nome"><b>Trabalhando no dia</b></td>${totalDias.map((x) => `<td class="${x.dow === 0 ? "ini-sem dom " : ""}${x.abaixo ? "baixo" : ""}" title="${x.abaixo ? `${x.abaixo} faixa(s) de 15 min abaixo do mínimo` : "cobertura ok"}">${x.trab}</td>`).join("")}<td class="col-h" colspan="${semanasVis.length}"></td></tr>`;
+  const total = `<tr class="total topo"><td class="col-nome"><b>Trabalhando no dia</b></td>${totalDias.map((x) => `<td class="${x.dow === 0 ? "ini-sem dom " : ""}${x.abaixo ? "baixo" : ""}" title="${x.abaixo ? `${x.abaixo} faixa(s) de 15 min abaixo do mínimo` : "cobertura ok"}">${x.trab}</td>`).join("")}<td class="col-h" colspan="${semanasVis.length}"></td></tr>`;
 
   return `<section class="cartao cartao-escala">
     <div class="barra-ferramentas nao-imprime">
@@ -816,8 +842,8 @@ function htmlEscala(p, pessoas, an) {
       </div>
     </div>
     <p class="sub nao-imprime">Escala de ${M.dataBR(M.lerISO(p.inicio))} a ${M.dataBR(fim)}. Clique numa célula para trocar (T = trabalha → F → X). As folgas vão para os dias de menor movimento (pesos na aba Turnos e mínimos); o domingo é em rodízio.</p>
-    <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${corpo}${total}</tbody></table></div>
-    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (meio período)</span><span><i class="cel X">X</i>ausente (falta/férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas em laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
+    <div class="rolagem" data-rolagem="escala"><table class="escala${dias.length > 35 ? " compacta" : ""}"><thead>${cabSem}${cabDia}</thead><tbody>${total}${corpo}</tbody></table></div>
+    <div class="legenda"><span><i class="cel T">T</i>trabalha</span><span><i class="cel F">F</i>folga</span><span><i class="cel D">D</i>domingo (jornada normal)</span><span><i class="cel X">X</i>ausente (falta/férias/atestado)</span><span><i class="cel trava" style="width:20px;height:20px"></i>ajustado à mão</span><span class="texto-fraco">Linha azul = turno e quantos dele trabalham no dia · Horas = jornada da pessoa · laranja = semana sem 2 folgas · vermelho = acima de ${p.cenario}h</span></div>
   </section>`;
 }
 
@@ -867,16 +893,21 @@ function htmlTurnos(p) {
     <td class="saida">${M.fmtHM(M.saidaTurno(t))}</td>
     <td class="texto-fraco">${usando(t.id)}</td>
     <td><button class="btn-x" data-acao="rm-turno" data-id="${t.id}" title="Remover turno">✕</button></td></tr>`).join("");
-  const domH = Math.max(0, M.hm(p.domingo.saida) - M.hm(p.domingo.entrada));
+  const fu = p.funcionamento;
+  const hor = (rot, k) => `<div class="linha-config"><b>${rot}:</b> <input type="time" class="ent hora" value="${fu[k][0]}" data-bind="funcionamento.${k}.0"> às <input type="time" class="ent hora" value="${fu[k][1]}" data-bind="funcionamento.${k}.1"></div>`;
   return `<section class="cartao">
     <div class="cartao-cab"><div><h2>Turnos</h2><p class="sub">A saída é calculada: entrada + jornada + almoço.</p></div></div>
     <div class="rolagem-conf"><table class="conf"><thead><tr><th>Turno</th><th>Entrada</th><th>Almoço</th><th>Duração</th><th>Jornada</th><th>Saída</th><th>Pessoas</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>
     <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="add-turno">+ Turno</button></p>
-    <div class="linha-config"><b>Domingo:</b> entrada <input type="time" class="ent hora" value="${p.domingo.entrada}" data-bind="domingo.entrada"> saída <input type="time" class="ent hora" value="${p.domingo.saida}" data-bind="domingo.saida"> <span>${M.fmtDur(domH)} no posto</span></div>
-    <div class="linha-config"><b>Loja aberta seg a sáb:</b> <input type="time" class="ent hora" value="${p.funcionamento.segsab[0]}" data-bind="funcionamento.segsab.0"> às <input type="time" class="ent hora" value="${p.funcionamento.segsab[1]}" data-bind="funcionamento.segsab.1"></div>
+    <h3 class="sub-titulo">Horário da loja <small class="texto-fraco">(usado no mapa de cobertura e nos mínimos — as horas de cada pessoa seguem a jornada dela)</small></h3>
+    ${hor("Loja aberta seg a sex", "segsab")}
+    ${hor("Sábado", "sab")}
+    <div class="linha-config"><b>Domingo:</b> ${fu.dom ? `<input type="time" class="ent hora" value="${fu.dom[0]}" data-bind="funcionamento.dom.0"> às <input type="time" class="ent hora" value="${fu.dom[1]}" data-bind="funcionamento.dom.1">` : `<span class="texto-fraco">não abre</span>`}
+      <label class="texto-fraco"><input type="checkbox" data-acao-change="dom-fechado"${fu.dom ? "" : " checked"}> fechado no domingo</label>
+      <span class="texto-fraco">· no domingo cada pessoa faz a jornada normal dela; turno que passa do horário é puxado para mais cedo</span></div>
+    <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="horario-padrao" title="Volta para o horário oficial desta loja">Usar horário padrão da loja</button></p>
     <div class="linha-config"><b>Movimento do dia</b> <span class="texto-fraco">(1 = fraco · 5 = forte — a folga vai para os dias mais fracos)</span></div>
     <div class="pesos">${[1, 2, 3, 4, 5, 6].map((dw) => `<label>${M.DOW[dw]} <select data-bind="pesos.${dw}" data-tipo="num">${opcoes([[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]], p.pesos[dw])}</select></label>`).join("")}</div>
-    <div class="linha-config"><b>Loja aberta domingo:</b> <input type="time" class="ent hora" value="${p.funcionamento.dom[0]}" data-bind="funcionamento.dom.0"> às <input type="time" class="ent hora" value="${p.funcionamento.dom[1]}" data-bind="funcionamento.dom.1"></div>
   </section>`;
 }
 
@@ -994,6 +1025,14 @@ document.addEventListener("click", (ev) => {
   if (a === "add-extra") return addExtra();
   if (a === "rm-extra") return removerExtra(el.dataset.id);
   if (a === "usar-dsr") return usarDSR(el.dataset.id);
+  if (a === "horario-padrao") {
+    const pl = plano();
+    pl.funcionamento = funcionamentoPadrao(lojaAtual());
+    if (!pl.funcionamento.dom) pl.domingo.minimo = 0;
+    M.redistribuir(pl, ativos(pl));
+    alterou();
+    return toast("Horário padrão da loja aplicado e folgas redistribuídas.", "ok");
+  }
   if (a === "salvar") return salvar();
   if (a === "visao") { est.aba = el.dataset.v; gravarLocal("escala_web_aba", est.aba); render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" }); }
   if (a === "ir-problema") { est.aba = "cobertura"; est.semanaMapa = +el.dataset.w || 0; render(); return window.scrollTo({ top: $(".visoes")?.offsetTop - 8 || 0, behavior: "smooth" }); }
@@ -1041,6 +1080,13 @@ document.addEventListener("change", (ev) => {
     return alterou();
   }
   if (el.dataset.acaoChange === "ver-semana") { est.verSemana = el.value === "todas" ? "todas" : +el.value; return render(); }
+  if (el.dataset.acaoChange === "dom-fechado") {
+    const pl = plano();
+    pl.funcionamento.dom = el.checked ? null : [...(funcionamentoPadrao(lojaAtual()).dom || ["08:00", "20:00"])];
+    if (el.checked) pl.domingo.minimo = 0;
+    M.redistribuir(pl, ativos(pl));
+    return alterou();
+  }
   if (el.dataset.acaoChange === "mostrar-minimo") { est.mostrarMinimo = el.checked; return render(); }
   if (el.dataset.acaoChange === "semanas") {
     plano().semanas = +el.value;
