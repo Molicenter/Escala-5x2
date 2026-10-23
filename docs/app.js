@@ -436,7 +436,7 @@ function alinharInicio(ini) {
 function novoPlano(setor, doQL, hoje) {
   const cenario = 42;
   // começa no mesmo domingo que as escalas já salvas desta loja (o mais usado); sem nenhuma, no próximo domingo
-  const inicio = inicioDaLoja() || M.iso(M.domingoDe(hoje, true));
+  const inicio = inicioDaLoja() || M.iso(M.domingoDe(hoje));   // sem escala salva: começa no domingo desta semana
   const naEscala = doQL.filter((x) => !motivoSemEscala(x));
   const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
   const func = funcionamentoPadrao(lojaAtual());
@@ -1217,7 +1217,21 @@ function htmlHoje() {
       <div class="hj-nav nao-imprime">${nav(-1, "Ontem")}${nav(0, "Hoje")}${nav(1, "Amanhã")}<input type="date" class="ent" value="${data}" data-acao-change="hoje-data"></div></div>
       <div class="hj-resumo"><span><b>${totT}</b> trabalhando</span><span><b>${totF}</b> de folga</span>${totX ? `<span><b>${totX}</b> ausentes</span>` : ""}</div>
       <p class="sub">Pela escala de cada departamento (a salva; sem escala salva entra a sugestão automática).${fora ? ` ${fora} departamento(s) sem escala para esta data.` : ""}</p></section>
-    ${htmlAvisoInicios()}<div class="hj-grade">${blocos.join("")}</div>`;
+    ${htmlForaPeriodo(data, totT + totF + totX)}${htmlAvisoInicios()}<div class="hj-grade">${blocos.join("")}</div>`;
+}
+
+// nenhuma escala cobre a data: diz de quando a quando elas vão e oferece ir para lá ou trazer o início para esta semana
+function htmlForaPeriodo(data, gente) {
+  if (gente) return "";
+  const ks = [...new Set(est.estrutura.flatMap((dp) => setoresDoDept(dp.dept)))];
+  const pers = ks.map((k) => est.planos[k]?.p).filter(Boolean).map((p) => { const ds = M.datasDoPlano(p); return [ds[0].iso, ds[ds.length - 1].iso]; });
+  if (!pers.length) return "";
+  const ini = pers.map((x) => x[0]).sort()[0], fim = pers.map((x) => x[1]).sort().slice(-1)[0];
+  const dom = M.iso(M.domingoDe(M.lerISO(data)));
+  const antes = data < ini;
+  return `<div class="aviso-topo nao-imprime"><span>As escalas desta loja vão de <b>${M.dataBR(M.lerISO(ini))}</b> a <b>${M.dataBR(M.lerISO(fim))}</b>, por isso ${M.dataBR(M.lerISO(data))} está vazio.</span>
+    <span class="alinhar"><button class="btn btn-peq btn-borda" data-acao="hoje-ir-data" data-d="${antes ? ini : fim}">Ver ${M.dataBR(M.lerISO(antes ? ini : fim))}</button>
+    ${antes ? `<button class="btn btn-peq btn-primario" data-acao="alinhar-inicio" data-ini="${dom}">Fazer as escalas começarem em ${M.dataBR(M.lerISO(dom))}</button>` : ""}</span></div>`;
 }
 
 // ---------- troca de folga ----------
@@ -1679,6 +1693,7 @@ document.addEventListener("click", (ev) => {
   if (a === "proximo-periodo") return proximoPeriodo();
   if (a === "hist-abrir") return abrirHistorico();
   if (a === "alinhar-inicio") { if (confirm(`Fazer todas as escalas desta loja começarem em ${M.dataBR(M.lerISO(el.dataset.ini))}? As folgas de quem mudar de data são refeitas (ajustes à mão continuam travados).`)) alinharInicio(el.dataset.ini); return; }
+  if (a === "hoje-ir-data") { HOJE.data = el.dataset.d; return render(); }
   if (a === "hoje-ir") { const base = est.hoje ? M.iso(est.hoje) : M.iso(new Date()); HOJE.data = M.iso(M.somaDias(M.lerISO(base), +el.dataset.d)); return render(); }
   if (a === "hist-restaurar") return restaurarVersao(el.dataset.id);
   if (a === "troca-abrir") { est.aberto = est.aberto === "troca" ? null : "troca"; TROCA.modo ||= "mover"; return render(); }
