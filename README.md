@@ -8,6 +8,11 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
 ## O que tem
+- **Aprovações** (só DP e Analista, no menu): status das escalas de todas as lojas, com botão Revisar para abrir e aprovar/devolver.
+- **Sugerir mínimos pela equipe** (aba Turnos e mínimos): mede quanta gente a equipe consegue deixar no posto em cada horário e propõe faixas possíveis.
+- **Escala por pessoa**: imprime/PDF com um cartão por funcionário (semanas × dias, horário de cada dia e horas da semana).
+- **Feriados**: nacionais já marcados (amarelo) e vésperas de Natal/Ano-Novo (rosa) na escala e no mapa; feriados da loja no campo "Feriados da loja".
+- **DSR1 e DSR2** de cada pessoa ao lado do cargo, na escala.
 - **Menu lateral azul** (igual ao QL, Promotores e Pedidos): Visões (Painel da mudança, QL Orçado x 5x2, Total da loja) e Departamentos, com ✓ salvo, ↑ enviada e ✓✓ aprovada. O botão ☰ esconde o menu.
 - **Envio e aprovação**: rascunho → a loja envia → o DP/Analista aprova (ou devolve com o motivo). Aprovada fica travada; só o DP/Analista reabre. Mudou depois de enviar, volta para rascunho.
 - **Aviso na hora do clique**: ao trocar uma célula, avisa se ficou 7 dias seguidos, 3 folgas juntas, folga em terça/sábado, semana sem as folgas certas ou cobertura abaixo do mínimo naquele dia.
@@ -25,7 +30,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - Imprimir / PDF e baixar planilha (CSV que abre no Excel)
 
 ## Publicar
-1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) , `sql/03_escala_orcado.sql`, `sql/04_escala_dsr.sql` (DSR1/DSR2 do Banco QL.xlsx → folga fixa) e `sql/05_escala_status.sql` (envio/aprovação: loja não aprova nem grava por cima de escala aprovada). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
+1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) , `sql/03_escala_orcado.sql`, `sql/04_escala_dsr.sql` (DSR1/DSR2 do Banco QL.xlsx → folga fixa) e `sql/05_escala_status.sql` (envio/aprovação: loja não aprova nem grava por cima de escala aprovada) e `sql/06_escala_aprovacoes.sql` (painel de aprovações do DP). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
 2. Subir a pasta `docs/` e o `sql/` neste repositório (pode apagar o `index.html`, `app.js` e `style.css` antigos da raiz).
 3. Settings → Pages → Branch `main`, pasta **/docs** → Save.
 
