@@ -311,11 +311,43 @@
         (risco3(b.pe) - risco3(a.pe)) ||
         (domContagem[a.pe.id] - domContagem[b.pe.id]) ||
         (((a.idx - w) % n + n) % n - (((b.idx - w) % n + n) % n)));
-      for (const { pe } of livres) {
-        // quem juntaria 3 folgas trabalha o domingo mesmo passando do mínimo
-        if (escalados >= reqDom && !risco3(pe)) continue;
-        set(pe.id, dom, "D"); escalados++;
+      // cobertura do domingo por horário: o rodízio preenche os horários que estão abaixo do mínimo
+      // (assim a abertura e o fechamento entram no domingo, não só quem é do turno com mais gente)
+      const covDom = new Array(jan.n).fill(0), minDom = new Array(jan.n).fill(0);
+      for (let k = 0; k < jan.n; k++) minDom[k] = minimoNoSlot(p, 0, jan.ini + k * PASSO);
+      const somaDom = (pe) => {
+        for (const [a, b] of intervalos(p, pe, 0, "D"))
+          for (let k = 0; k < jan.n; k++) { const t = jan.ini + k * PASSO; if (t >= a && t < b) covDom[k]++; }
+      };
+      const ajudaDom = (pe) => {
+        let g = 0;
+        for (const [a, b] of intervalos(p, pe, 0, "D"))
+          for (let k = 0; k < jan.n; k++) { const t = jan.ini + k * PASSO; if (t >= a && t < b && covDom[k] < minDom[k]) g++; }
+        return g;
+      };
+      for (const pe of pessoas) if (valor(p, pe.id, dom) === "D") somaDom(pe);
+      let fila = livres.map((x) => x.pe);
+      // quem juntaria 3 folgas trabalha o domingo mesmo passando do mínimo
+      for (const pe of fila.filter(risco3)) { set(pe.id, dom, "D"); escalados++; somaDom(pe); }
+      fila = fila.filter((pe) => !risco3(pe));
+      // teto por turno num mesmo domingo: no máx. maxDomSeg de cada (maxDomSeg+1) pessoas do turno
+      // (ex.: máx. 2 domingos seguidos → 2/3 do turno), para o rodízio se sustentar semana a semana
+      const noTurno = {}, usadosTurno = {};
+      for (const pe of pessoas) if (pe.domingo !== "nunca") noTurno[pe.turno] = (noTurno[pe.turno] || 0) + 1;
+      for (const pe of pessoas) if (valor(p, pe.id, dom) === "D") usadosTurno[pe.turno] = (usadosTurno[pe.turno] || 0) + 1;
+      const tetoTurno = (pe) => Math.max(1, Math.ceil((noTurno[pe.turno] || 1) * maxDomSeg / (maxDomSeg + 1)));
+      const cabe = (pe) => (usadosTurno[pe.turno] || 0) < tetoTurno(pe);
+      const usa = (pe) => { usadosTurno[pe.turno] = (usadosTurno[pe.turno] || 0) + 1; };
+      while (hDom && fila.length) {
+        // o 1º da fila do rodízio que cobre algum horário em falta
+        // (quem já está no máximo de domingos seguidos não entra: o domingo fica com o aviso de falta)
+        const i = fila.findIndex((pe) => domSeguidos[pe.id] < maxDomSeg && cabe(pe) && ajudaDom(pe) > 0);
+        if (i < 0) break;
+        const pe = fila.splice(i, 1)[0];
+        set(pe.id, dom, "D"); escalados++; somaDom(pe); usa(pe);
       }
+      // garante pelo menos o mínimo do domingo em quantidade (caso sem faixas por horário)
+      for (const pe of fila) { if (escalados >= reqDom) break; if (domSeguidos[pe.id] >= maxDomSeg || !cabe(pe)) continue; set(pe.id, dom, "D"); escalados++; somaDom(pe); usa(pe); }
       for (const pe of pessoas) {
         if (valor(p, pe.id, dom) === "D") { domContagem[pe.id]++; domSeguidos[pe.id]++; } else domSeguidos[pe.id] = 0;
       }

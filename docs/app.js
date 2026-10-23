@@ -83,7 +83,7 @@ const baseTurno = (t) => ({ ...(t.hoje || { entrada: t.entrada, almoco: t.almoco
 function toast(msg, tipo = "") {
   const t = $("#toast");
   t.textContent = msg; t.className = "toast " + tipo; t.hidden = false;
-  clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), tipo === "erro" ? 6500 : 3200);
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), tipo === "erro" || tipo === "aviso" ? 7000 : 3200);
 }
 function carregando(sim) { $("#carregando").hidden = !sim; }
 function lerLocal(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -104,6 +104,8 @@ const MENSAGENS = {
   ESCOPO_INVALIDO: "Escolha a loja.",
   SETOR_INVALIDO: "Setor inválido.",
   DADOS_GRANDES: "A escala ficou grande demais para gravar. Diminua o número de semanas.",
+  ESCALA_APROVADA: "Esta escala já foi aprovada pelo DP. Para mudar, o DP ou o Analista precisa reabrir.",
+  SEM_PERMISSAO_APROVAR: "Só o Departamento Pessoal ou o Analista podem aprovar a escala.",
   "Could not find the function": "O banco ainda não tem as funções da escala (falta rodar os SQL 01 e 02 da escala).",
 };
 function traduzir(msg) {
@@ -239,7 +241,7 @@ async function carregarLoja(loja) {
     carregarOrcado();
   } catch (e) {
     toast(e.message, "erro");
-    $("#topo").innerHTML = "";
+    $("#topo").innerHTML = ""; $("#lateral").innerHTML = "";
     $("#conteudo").innerHTML = `<div class="cartao"><p class="erro">${esc(e.message)}</p><p><button class="btn" data-acao="recarregar">Tentar de novo</button> <button class="btn btn-borda" data-acao="sair">Sair</button></p></div>`;
   } finally {
     carregando(false);
@@ -275,8 +277,9 @@ function garantirPlano(k) {
   } else if (rasc) gravarRascunho(d.loja, k, null);
   const migrou = !!p._migrou; delete p._migrou;
   est.sync[k] = sincronizar(p, doQL);
-  if (migrou && !est.sync[k].dsrMudou && p.pessoas.length) M.redistribuir(p, ativos(p));
-  if ((est.sync[k].dsrMudou || migrou) && salvo) {
+  const livre = podeEditar(p);
+  if (migrou && livre && !est.sync[k].dsrMudou && p.pessoas.length) M.redistribuir(p, ativos(p));
+  if (livre && (est.sync[k].dsrMudou || migrou) && salvo) {
     sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
     const o = [migrou ? "regras novas da escala (jornada por cenário: 44h como hoje, 42h/40h com mais horas por dia)" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
     if (!est.silencioso) toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
@@ -455,15 +458,77 @@ function sincronizar(p, doQL) {
   // ordem: QL por turno e nome, extras no fim
   const ordT = (pe) => p.turnos.findIndex((t) => t.id === pe.turno);
   p.pessoas.sort((a, b) => (a.origem === "extra") - (b.origem === "extra") || ordT(a) - ordT(b) || a.nome.localeCompare(b.nome));
-  if (vazio || dsrMudou) M.redistribuir(p, ativos(p));   // ajustes à mão (bolinha rosa) continuam travados
+  if ((vazio || dsrMudou) && podeEditar(p)) M.redistribuir(p, ativos(p));   // escala aprovada não é refeita sozinha   // ajustes à mão (bolinha rosa) continuam travados
   return { novos, saiu, dsrMudou };
 }
 
 // ============================================================
 // ALTERAÇÕES
 // ============================================================
+// ============================================================
+// STATUS DA ESCALA: rascunho → enviada (loja) → aprovada (DP/Analista)
+// Aprovada fica travada para todos; o DP/Analista pode reabrir. Mudou depois de enviar → volta a rascunho.
+// O servidor (sql/05) também confere: loja não aprova e não grava por cima de escala aprovada.
+// ============================================================
+const ROT_STATUS = { rascunho: "Rascunho", enviada: "Enviada para aprovação", aprovada: "Aprovada" };
+const statusDe = (p) => p?.status?.s ? p.status : { s: "rascunho" };
+const ehDP = () => sessao?.perfil === "dp" || sessao?.perfil === "analista";
+const podeEditar = (p) => statusDe(p).s !== "aprovada";
+function motivoBloqueio(p) {
+  const st = statusDe(p);
+  return `Escala aprovada${st.por ? ` por ${st.por}` : ""}${st.em ? ` em ${fmtQuando(st.em)}` : ""}. ${ehDP() ? "Clique em Reabrir para mudar." : "Para mudar, peça ao DP para reabrir."}`;
+}
+function fmtQuando(isoTxt) {
+  const d = new Date(isoTxt);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }).replace(",", "");
+}
+function mudarStatus(s, obs = "") {
+  const p = plano();
+  const ev = { s, por: sessao.email, em: new Date().toISOString(), ...(obs ? { obs } : {}) };
+  p.status = ev;
+  p.statusHist = [ev, ...(p.statusHist || [])].slice(0, 20);
+  alterou({ status: true, render: false });
+  return salvar();
+}
+function acaoStatus(a) {
+  const p = plano();
+  const st = statusDe(p).s;
+  if (a === "st-enviar") {
+    const an = M.analisar(p, ativos(p));
+    const n = itensAtencao(p, an).length;
+    if (n && !confirm(`Esta escala tem ${n} ponto(s) de atenção (botão ! vermelho). Enviar para aprovação mesmo assim?`)) return;
+    return mudarStatus("enviada");
+  }
+  if (!ehDP()) return toast("Só o Departamento Pessoal ou o Analista podem fazer isso.", "aviso");
+  if (a === "st-aprovar") { if (confirm(`Aprovar a escala de ${infoSetor(est.setor).rotulo}? Ela fica travada até ser reaberta.`)) return mudarStatus("aprovada"); return; }
+  if (a === "st-devolver") {
+    const obs = prompt("Devolver para a loja ajustar. O que precisa mudar? (aparece para a loja)", "");
+    if (obs === null) return;
+    return mudarStatus("rascunho", obs.trim() ? `Devolvida: ${obs.trim()}` : "Devolvida para ajuste");
+  }
+  if (a === "st-reabrir" && st === "aprovada") { if (confirm("Reabrir a escala para alteração? Ela volta para rascunho e precisa ser aprovada de novo.")) return mudarStatus("rascunho", "Reaberta"); }
+}
+function htmlStatus(p) {
+  const st = statusDe(p);
+  const quem = st.por ? ` · ${esc(st.por)}${st.em ? ` em ${esc(fmtQuando(st.em))}` : ""}` : "";
+  const obs = st.obs ? `<span class="st-obs">${esc(st.obs)}</span>` : "";
+  let bts = "";
+  if (st.s === "rascunho") bts = `<button class="btn btn-peq btn-primario" data-acao="st-enviar">Enviar para aprovação</button>${ehDP() ? `<button class="btn btn-peq btn-borda" data-acao="st-aprovar">Aprovar direto</button>` : ""}`;
+  if (st.s === "enviada") bts = ehDP() ? `<button class="btn btn-peq btn-verde" data-acao="st-aprovar">Aprovar</button><button class="btn btn-peq btn-borda" data-acao="st-devolver">Devolver</button>` : `<span class="texto-fraco">aguardando o DP</span>`;
+  if (st.s === "aprovada") bts = ehDP() ? `<button class="btn btn-peq btn-borda" data-acao="st-reabrir">Reabrir</button>` : `<span class="texto-fraco">travada · só o DP reabre</span>`;
+  const hist = (p.statusHist || []).slice(1, 4).map((h) => `${ROT_STATUS[h.s] || h.s} · ${esc(h.por || "")} ${esc(fmtQuando(h.em))}${h.obs ? ` (${esc(h.obs)})` : ""}`).join("<br>");
+  return `<div class="status-escala st-${st.s} nao-imprime" ${hist ? `title="${hist.replace(/<br>/g, "&#10;")}"` : ""}>
+    <span class="st-selo">${ROT_STATUS[st.s]}</span><span class="st-quem">${quem}</span>${obs}<span class="st-bts">${bts}</span></div>`;
+}
+
 function alterou(opts = {}) {
   const reg = est.planos[est.setor];
+  // mudou a escala depois de enviar: volta para rascunho (precisa enviar de novo)
+  if (!opts.status && statusDe(reg.p).s === "enviada") {
+    const ev = { s: "rascunho", por: sessao.email, em: new Date().toISOString(), obs: "Alterada depois de enviar" };
+    reg.p.status = ev; reg.p.statusHist = [ev, ...(reg.p.statusHist || [])].slice(0, 20);
+  }
   reg.sujo = true;
   gravarRascunho(est.loja, est.setor, { base: reg.versao, p: reg.p });
   if (opts.render !== false) render();
@@ -497,15 +562,30 @@ function trocarCenario(h) {
     : `${h}h no 5x2: ${M.fmtDur(j)} por dia, 2 folgas por semana. Escala refeita${manuais ? ` (${manuais} turno(s) ajustado(s) à mão ficaram como estavam)` : ""}.`, "ok");
 }
 
+// regras da pessoa e falta de cobertura no dia, para avisar na hora do clique
+function conferirPessoa(p, pid, isoData) {
+  const an = M.analisar(p, ativos(p));
+  return { txt: an.avisos.filter((a) => a.pid === pid).map((a) => a.txt), falta: an.porDia.find((x) => x.iso === isoData)?.abaixo || 0 };
+}
 function clicarCelula(pid, isoData) {
   const p = plano();
+  if (!podeEditar(p)) return toast(motivoBloqueio(p), "aviso");
   const d = M.datasDoPlano(p).find((x) => x.iso === isoData);
   if (!d) return;
+  const antes = conferirPessoa(p, pid, isoData);
   const atual = M.valor(p, pid, d);
   const ciclo = d.dow === 0 ? { D: "F", F: "X", X: "D" } : { T: "F", F: "X", X: "T" };
-  (p.grade[pid] ||= {})[isoData] = ciclo[atual];
+  const novo = ciclo[atual];
+  (p.grade[pid] ||= {})[isoData] = novo;
   (p.travas[pid] ||= {})[isoData] = true;
+  const depois = conferirPessoa(p, pid, isoData);
   alterou();
+  // avisa o que a troca quebrou (a troca fica feita; dá para voltar clicando até o valor anterior)
+  const pe = p.pessoas.find((x) => x.id === pid);
+  const quebrou = depois.txt.filter((t) => !antes.txt.includes(t));
+  if (novo === "F" && (p.diasSemFolga || []).includes(d.dow)) quebrou.unshift(`${M.DOW_LONGO[d.dow].toLowerCase()} é dia sem folga (dia forte de venda)`);
+  if (depois.falta > antes.falta) quebrou.push(`${M.DOW[d.dow]} ${M.dataCurta(d.d)} fica abaixo do mínimo em ${depois.falta} faixa(s) de 15 min`);
+  if (quebrou.length) toast(`Atenção · ${pe?.nome || ""}: ${quebrou.join(" · ")}.`, "aviso");
 }
 
 function trocarModo(m) {
@@ -681,6 +761,7 @@ function render() {
 
   const p = plano();
   if (est.modo !== "escala") {
+    $("#lateral").innerHTML = htmlLateral();
     $("#topo").innerHTML = htmlTopo(p);
     $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : est.modo === "total" ? htmlTotal() : htmlOrcado());
     htmlBarra();
@@ -695,9 +776,10 @@ function render() {
     : visao === "cobertura" ? htmlMapa(p, an)
     : visao === "regras" ? `<div class="duas">${htmlTurnos(p)}${htmlMinimos(p)}</div>`
     : htmlPessoas(p);
+  $("#lateral").innerHTML = htmlLateral();
   $("#topo").innerHTML = htmlTopo(p);
   $("#conteudo").innerHTML = [
-    htmlAbas(p, an), htmlAberto(p, an), htmlFaixaOrcado(p),
+    htmlAbas(p, an), htmlStatus(p), htmlAberto(p, an), htmlFaixaOrcado(p),
     `<div class="painel painel-so">${htmlKpis(p, pessoas, an)}</div>`,
     htmlRoteiro(p, an),
     `<nav class="visoes nao-imprime">${VISOES.map(([id, r, ic]) => `<button type="button" data-acao="visao" data-v="${id}" class="${id === visao ? "ativo" : ""}">${ic}<span>${r}</span>${id === "cobertura" && an.faixasAbaixo ? `<em>${an.problemas.length}</em>` : ""}</button>`).join("")}</nav>`,
@@ -729,7 +811,7 @@ function htmlTopo(p) {
     : `<span class="pilula">Seg–sex <b>${fh(fu.segsab)}</b></span><span class="pilula">Sáb <b>${fh(fu.sab)}</b></span>`;
   return `<div class="topo-in">
     <div class="topo-linha">
-      <div class="topo-titulo"><img src="logo.png" alt=""><h1>Escala 5x2 <span class="ponto">·</span> ${seletor}</h1></div>
+      <div class="topo-titulo"><button class="btn-menu" type="button" data-acao="menu" aria-label="Mostrar ou esconder o menu" title="Mostrar/esconder o menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><h1>${seletor} <span class="ponto">·</span> <span class="topo-visao">${esc(tituloVisao())}</span></h1></div>
       <div class="pilulas">${orc ? `<span class="pilula">QL Orçado <b>x 5x2</b></span><span class="pilula">Hoje <b>6x1 · 44h</b></span><span class="pilula">Jornada <b>${M.fmtDur(j.jornadaMin)}</b></span>` : `
         <span class="pilula">Folgas <b>${M.folgasSemana(cenAtual)}/sem</b></span>
         <span class="pilula">Jornada <b>${jEsc}</b></span>
@@ -738,13 +820,57 @@ function htmlTopo(p) {
       </div>
       <div class="topo-conta">
         <div class="cenarios">${[44, 42, 40].map((h) => `<button type="button" data-acao="cenario" data-h="${h}" class="${cenAtual === h ? "ativo" : ""}" title="${orc ? M.CENARIOS[h].rotulo + " · conta do QL Orçado" : titEsc[h]}">${h}h</button>`).join("")}</div>
-        <div class="quem"><strong>${esc(sessao.email)}</strong>${esc(ROTULO_PERFIL[sessao.perfil] || "")}</div>
         <button class="btn btn-peq btn-vidro" data-acao="imprimir" title="Imprimir ou salvar em PDF">PDF</button>
-        <button class="btn btn-peq btn-vidro" data-acao="tema" title="Tema claro/escuro">◐</button>
-        <button class="btn btn-peq btn-vidro" data-acao="sair">Sair</button>
       </div>
     </div>
   </div>`;
+}
+
+// título da visão atual (no topo, ao lado da loja)
+function tituloVisao() {
+  if (est.modo === "painel") return "Painel da mudança";
+  if (est.modo === "orcado") return "QL Orçado x 5x2";
+  if (est.modo === "total") return "Total da loja";
+  return infoSetor(est.setor).rotulo;
+}
+
+// menu lateral azul (mesma casca dos apps QL, Promotores e Pedidos)
+function htmlLateral() {
+  const m = est.modo, cur = lerChave(est.setor);
+  const salvosDept = (dept) => est.dados.planos.some((x) => lerChave(x.setor)?.dept === dept);
+  const sujoDept = (dept) => Object.keys(est.planos).some((k) => est.planos[k].sujo && lerChave(k)?.dept === dept);
+  const statusDept = (dept) => {
+    const sts = est.dados.planos.filter((x) => lerChave(x.setor)?.dept === dept).map((x) => statusDe(x.dados).s);
+    return sts.includes("aprovada") && sts.every((x) => x === "aprovada") ? "aprovada" : sts.includes("enviada") ? "enviada" : "";
+  };
+  const ic = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const IC = {
+    painel: ic('<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>'),
+    orcado: ic('<rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/>'),
+    total: ic('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
+    dept: ic('<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>'),
+  };
+  const total = est.estrutura.reduce((s2, x) => s2 + x.n, 0);
+  const selo = (dept) => {
+    if (sujoDept(dept)) return `<span class="marca-nav sujo" title="alterações não salvas">•</span>`;
+    const st = statusDept(dept);
+    if (st === "aprovada") return `<span class="marca-nav ok" title="escala aprovada pelo DP">✓✓</span>`;
+    if (st === "enviada") return `<span class="marca-nav env" title="enviada para aprovação">↑</span>`;
+    return salvosDept(dept) ? `<span class="marca-nav ok" title="escala salva">✓</span>` : "";
+  };
+  return `<div class="marca"><img class="marca-selo" src="logo.png" alt="Passarinho Molicenter"><div><h1>Escala 5x2</h1><p>${esc(nomeLoja(est.loja))}</p></div></div>
+    <nav class="nav">
+      <div class="nav-rotulo">Visões</div>
+      <button type="button" data-acao="modo" data-v="painel" class="${m === "painel" ? "ativo" : ""}" title="Resumo para a reunião">${IC.painel}<span>Painel da mudança</span></button>
+      <button type="button" data-acao="modo" data-v="orcado" class="${m === "orcado" ? "ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede">${IC.orcado}<span>QL Orçado x 5x2</span></button>
+      <button type="button" data-acao="modo" data-v="total" class="${m === "total" ? "ativo" : ""}" title="Todos os departamentos juntos">${IC.total}<span>Total da loja</span><span class="qtd">${total}</span></button>
+      <div class="nav-rotulo">Departamentos</div>
+      ${est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${m === "escala" && dp.dept === cur?.dept ? "ativo" : ""}">${IC.dept}<span>${esc(titulo(dp.dept))}</span>${selo(dp.dept)}<span class="qtd">${dp.n}</span></button>`).join("")}
+    </nav>
+    <div class="conta">
+      <strong>${esc(sessao.email)}</strong><small>${esc(ROTULO_PERFIL[sessao.perfil] || "")}</small>
+      <div class="conta-bts"><button class="btn btn-peq" data-acao="tema" title="Tema claro/escuro"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/></svg>Tema</button><button class="btn btn-peq" data-acao="sair">Sair</button></div>
+    </div>`;
 }
 
 function marcasSetor(k) {
@@ -776,7 +902,8 @@ function htmlAbas(p, an) {
       <button type="button" data-acao="modo" data-v="total" class="dep dep-total${m === "total" ? " ativo" : ""}" title="Todos os departamentos juntos: quantos trabalham em cada dia">${icTot}Total <span class="qtd">${total}</span></button>
       ${est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="dep${m === "escala" && dp.dept === cur?.dept ? " ativo" : ""}">${esc(titulo(dp.dept))} <span class="qtd">${dp.n}</span>${sujoDept(dp.dept) ? "<span class='qtd'>•</span>" : salvosDept(dp.dept) ? "<span class='salvo'>✓</span>" : ""}</button>`).join("")}
     </div>`;
-  const nav = `<div class="navegacao nao-imprime"><div class="nav-linha"><span class="nav-rot">Visões</span>${visoesGerais}</div><div class="nav-linha"><span class="nav-rot">Departamentos</span>${depts}</div></div>`;
+  void visoesGerais; void depts;   // a navegação fica no menu lateral (htmlLateral)
+  const nav = "";
   if (m !== "escala") return nav;
   const dp = est.estrutura.find((x) => x.dept === cur.dept);
   const chips = dp ? [[chaveSetor(dp.dept), "Todas as funções", dp.n], ...dp.funcoes.map((f) => [chaveSetor(dp.dept, f.f), titulo(f.f), f.n])] : [];
@@ -1154,6 +1281,9 @@ document.addEventListener("click", (ev) => {
   const el = ev.target.closest("[data-acao]");
   if (!el || el.tagName === "SELECT" || el.tagName === "INPUT") return;
   const a = el.dataset.acao;
+  if (a.startsWith("st-")) return acaoStatus(a);
+  const EDITA = ["redistribuir", "destravar", "add-turno", "rm-turno", "add-faixa", "rm-faixa", "add-extra", "rm-extra", "usar-dsr", "horario-padrao", "escalonar"];
+  if (est.modo === "escala" && (EDITA.includes(a) || a === "cenario") && plano() && !podeEditar(plano())) return toast(motivoBloqueio(plano()), "aviso");
   if (a === "sair") return sair(false);
   if (a === "recarregar") {
     if (algumSujo()) { salvarRascunhosTodos(); }
@@ -1165,6 +1295,7 @@ document.addEventListener("click", (ev) => {
     document.documentElement.dataset.theme = atual; gravarLocal("escala_web_tema", atual); return;
   }
   if (a === "imprimir") return window.print();
+  if (a === "menu") { const f = document.documentElement.classList.toggle("menu-fechado"); gravarLocal("escala_web_menu", f ? "fechado" : null); return; }
   if (a === "modo") { trocarModo(el.dataset.v); return; }
   if (a === "orc-base") { ORC.base = el.dataset.v; gravarLocal("escala_orc_base", ORC.base); return render(); }
   if (a === "orc-cenario") { ORC.cenario = +el.dataset.h; gravarLocal("escala_orc_cenario", String(ORC.cenario)); return render(); }
@@ -1216,6 +1347,9 @@ function salvarRascunhosTodos() {
 
 document.addEventListener("change", (ev) => {
   const el = ev.target;
+  const ac = el.dataset.acaoChange;
+  const naoEdita = ["loja", "orc-escopo", "pn-custo", "orc-gestao", "ver-semana", "mostrar-minimo"];
+  if (est.modo === "escala" && (el.dataset.bind || (ac && !naoEdita.includes(ac))) && plano() && !podeEditar(plano())) { toast(motivoBloqueio(plano()), "aviso"); return render(); }
   if (el.dataset.acaoChange === "loja") {
     const nova = +el.value;
     if (algumSujo() && !confirm("Há alterações não salvas nesta loja. Trocar mesmo assim? (elas ficam guardadas neste navegador)")) { el.value = est.loja; return; }
