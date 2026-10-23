@@ -538,3 +538,12 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .cartao .sub-titulo small { font-weight: 500; font-size: .75rem; }
 .escala tr.total .col-nome { background: var(--superficie-2) !important; }
 .escala tr.total .col-nome b { color: var(--azul) !important; opacity: 1 !important; font-size: .8rem; }
+
+/* data no formato brasileiro (datas-br.js): texto dd/mm/aaaa + botão do calendário */
+.data-br { position: relative; display: inline-block; }
+.data-br input[type=text] { padding-right: 40px; width: 150px; font-variant-numeric: tabular-nums; }
+.data-br input.invalida { border-color: #d6336c; }
+.data-br-nativo { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+.data-br-cal { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: var(--texto); cursor: pointer; opacity: .75; }
+.data-br-cal:hover { opacity: 1; background: color-mix(in srgb, var(--azul) 10%, transparent); }
+@media print { .data-br-cal { display: none; } }
