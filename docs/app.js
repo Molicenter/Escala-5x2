@@ -49,10 +49,14 @@ function diaDSR(v) {
   const k = String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/-?FEIRA/, "").trim();
   return k in DIA_DSR ? DIA_DSR[k] : null;
 }
-function regraDSR(x) {
+// · DSR num "dia sem folga" (terça/sábado) com outro dia de semana no outro DSR → usa só o outro
+//   (ex.: Ter + Qui → folga fixa na quinta). Se o único dia de semana do DSR for terça/sábado, fica.
+function regraDSR(x, bloqueados = []) {
   const a = diaDSR(x.d1), b = diaDSR(x.d2);
   if (a == null && b == null) return null;
-  const sem = [a, b].filter((d) => d != null && d !== 0);
+  let sem = [a, b].filter((d) => d != null && d !== 0);
+  const livres = sem.filter((d) => !bloqueados.includes(d));
+  if (livres.length && livres.length < sem.length) sem = livres;
   return { domingo: a === 0 ? "nunca" : "rodizio", folgaFixa: sem[0] ?? null, folgaFixa2: sem[1] ?? null };
 }
 const textoDSR = (pe) => (pe.dsr && pe.dsr.length ? "DSR " + pe.dsr.map((d) => M.DOW[d].slice(0, 3)).join("+") : "");
@@ -268,7 +272,7 @@ function garantirPlano(k) {
   if (migrou && !est.sync[k].dsrMudou && p.pessoas.length) M.redistribuir(p, ativos(p));
   if ((est.sync[k].dsrMudou || migrou) && salvo) {
     sujo = true; gravarRascunho(d.loja, k, { base: versao, p });
-    const o = [migrou ? "horário da loja / 8 semanas" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
+    const o = [migrou ? "regras novas da escala (horário da loja, 8 semanas, sem folga ter/sáb)" : "", est.sync[k].dsrMudou ? `folgas fixas do DSR em ${est.sync[k].dsrMudou} pessoa(s)` : ""].filter(Boolean).join(" e ");
     toast(`Escala refeita: ${o}. Confira e clique em Salvar.`, "ok");
   }
   est.planos[k] = { p, versao, usuario, sujo };
@@ -336,7 +340,7 @@ function novoPlano(setor, doQL, hoje) {
   const naEscala = doQL.filter((x) => !motivoSemEscala(x));
   const n = naEscala.filter((x) => !/FERIAS|FÉRIAS|AFAST/i.test(x.s || "")).length || naEscala.length;
   const p = {
-    v: VERSAO_PLANO, setor, cenario, inicio, semanas: 8, semV: 2,
+    v: VERSAO_PLANO, setor, cenario, inicio, semanas: 8, semV: 2, diasSemFolga: +lojaAtual() === 30 ? [] : [2, 6],
     funcionamento: funcionamentoPadrao(lojaAtual()), funcV: FUNC_V,
     domingo: { entrada: "08:00", saida: "20:00", minimo: +lojaAtual() === 30 ? 0 : Math.max(1, Math.round(n * MIN_DOM)) },
     domingosSeguidosMax: 2,
@@ -352,6 +356,8 @@ function normalizarPlano(p, setor) {
   p.v ||= VERSAO_PLANO; p.setor = setor;
   p.cenario = M.CENARIOS[p.cenario] ? p.cenario : 42;
   // padrão passou de 4 para 8 semanas (~60 dias): planos que estavam no padrão antigo vão para 8
+  // terça e sábado (melhores dias de venda) sem folga por padrão — vale também para os planos salvos
+  if (!Array.isArray(p.diasSemFolga)) { p.diasSemFolga = +lojaAtual() === 30 ? [] : [2, 6]; p._migrou = true; }
   if (!p.semV) { if (!p.semanas || +p.semanas === 4) { p.semanas = 8; p._migrou = true; } p.semV = 2; }
   p.semanas = Math.min(8, Math.max(1, +p.semanas || 8));
   // planos de antes do horário por loja: passam para o horário oficial da loja (e o motor redistribui)
@@ -388,7 +394,7 @@ function sincronizar(p, doQL) {
     }
     pe.sit = x.s || ""; pe.senior = x.e || ""; pe.funcao = x.f || ""; pe.fora = false;
     // DSR do Excel: vira a regra de domingo + folga fixa, até alguém mudar à mão nesta escala
-    const r = regraDSR(x);
+    const r = regraDSR(x, p.diasSemFolga || []);
     pe.dsr = [diaDSR(x.d1), diaDSR(x.d2)].filter((d) => d != null);
     if (!pe.dsr.length) delete pe.dsr;
     if (r) pe.dsrRegra = r; else delete pe.dsrRegra;
@@ -910,6 +916,7 @@ function htmlTurnos(p) {
     <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="horario-padrao" title="Volta para o horário oficial desta loja">Usar horário padrão da loja</button></p>
     <div class="linha-config"><b>Movimento do dia</b> <span class="texto-fraco">(1 = fraco · 5 = forte — a folga vai para os dias mais fracos)</span></div>
     <div class="pesos">${[1, 2, 3, 4, 5, 6].map((dw) => `<label>${M.DOW[dw]} <select data-bind="pesos.${dw}" data-tipo="num">${opcoes([[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]], p.pesos[dw])}</select></label>`).join("")}</div>
+    <div class="linha-config"><b>Dia sem folga:</b> ${[1, 2, 3, 4, 5, 6].map((dw) => `<label class="texto-fraco"><input type="checkbox" data-acao-change="sem-folga" data-dow="${dw}"${(p.diasSemFolga || []).includes(dw) ? " checked" : ""}> ${M.DOW[dw]}</label>`).join(" ")} <span class="texto-fraco">· o motor não coloca folga nesses dias (DSR nesses dias passa para o outro dia de semana do DSR; se não tiver outro, fica)</span></div>
   </section>`;
 }
 
@@ -1082,6 +1089,21 @@ document.addEventListener("change", (ev) => {
     return alterou();
   }
   if (el.dataset.acaoChange === "ver-semana") { est.verSemana = el.value === "todas" ? "todas" : +el.value; return render(); }
+  if (el.dataset.acaoChange === "sem-folga") {
+    const pl = plano(), dw = +el.dataset.dow;
+    const set = new Set(pl.diasSemFolga || []);
+    if (el.checked) set.add(dw); else set.delete(dw);
+    pl.diasSemFolga = [...set].sort();
+    const doQL = new Map(est.dados.pessoas.map((x) => [idPessoaQL(x.n), x]));
+    for (const pe of pl.pessoas) {
+      const x = doQL.get(pe.id), r = x && regraDSR(x, pl.diasSemFolga);
+      if (!r) continue;
+      pe.dsrRegra = r;
+      if (pe.dsrAuto !== false) Object.assign(pe, { domingo: r.domingo, folgaFixa: r.folgaFixa, folgaFixa2: r.folgaFixa2 });
+    }
+    M.redistribuir(pl, ativos(pl));
+    return alterou();
+  }
   if (el.dataset.acaoChange === "dom-fechado") {
     const pl = plano();
     pl.funcionamento.dom = el.checked ? null : [...(funcionamentoPadrao(lojaAtual()).dom || ["08:00", "20:00"])];

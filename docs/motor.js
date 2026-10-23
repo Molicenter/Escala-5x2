@@ -282,13 +282,18 @@
         livres.push({ pe, idx });
       });
       // folgar neste domingo juntaria 3 folgas (sábado de folga antes + folga fixa na segunda)? vai trabalhar primeiro
-      const risco3 = (pe) => (folgaEm(pe, dom.i - 1) && +pe.folgaFixa === 1 ? 1 : 0);
+      // folgar neste domingo juntaria 3 folgas? (sex+sáb de folga antes, ou sáb antes + folga fixa na segunda)
+      const risco3 = (pe) => (folgaEm(pe, dom.i - 1) && (folgaEm(pe, dom.i - 2) || +pe.folgaFixa === 1) ? 1 : 0);
       livres.sort((a, b) =>
         ((domSeguidos[a.pe.id] >= maxDomSeg) - (domSeguidos[b.pe.id] >= maxDomSeg)) ||
         (risco3(b.pe) - risco3(a.pe)) ||
         (domContagem[a.pe.id] - domContagem[b.pe.id]) ||
         (((a.idx - w) % n + n) % n - (((b.idx - w) % n + n) % n)));
-      for (const { pe } of livres) { if (escalados >= reqDom) break; set(pe.id, dom, "D"); escalados++; }
+      for (const { pe } of livres) {
+        // quem juntaria 3 folgas trabalha o domingo mesmo passando do mínimo
+        if (escalados >= reqDom && !risco3(pe)) continue;
+        set(pe.id, dom, "D"); escalados++;
+      }
       for (const pe of pessoas) {
         if (valor(p, pe.id, dom) === "D") { domContagem[pe.id]++; domSeguidos[pe.id]++; } else domSeguidos[pe.id] = 0;
       }
@@ -341,6 +346,8 @@
               sobra += c - m; nSlots++;
             }
             let nota = -deficit * 60 + (nSlots ? (sobra / nSlots) * 6 : 0) - (+pesos[d.dow] || 3) * 5;
+            // dia sem folga (ex.: terça e sábado, os dias mais fortes): só se não houver outro jeito
+            if ((p.diasSemFolga || []).includes(d.dow)) nota -= 2000;
             if (pe.folgaFixa && +pe.folgaFixa === d.dow) nota += 400;
             if (pe.folgaFixa2 && +pe.folgaFixa2 === d.dow) nota += 300;   // 2ª folga preferida (DSR2)
             // mesma folga da semana passada = escala mais previsível
