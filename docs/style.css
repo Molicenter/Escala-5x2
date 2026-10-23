@@ -711,3 +711,12 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .fer-in { min-width: 320px; }
 :root[data-theme="dark"] .escala .cab-dia th.fer-feriado, :root[data-theme="dark"] .fer-tag.fer-feriado { background: #4A3A10 !important; color: #FFD27A; }
 :root[data-theme="dark"] .escala .cab-dia th.fer-vespera, :root[data-theme="dark"] .fer-tag.fer-vespera { background: #4A1530 !important; color: #FF8CC6; }
+
+/* impressão: a escala grande pode quebrar entre páginas (antes pulava inteira para a página seguinte
+   e deixava a 1ª quase vazia); só cada linha fica inteira, e o cabeçalho repete em cada página */
+@media print {
+  .cartao-escala, .cartao:has(table.escala), .cartao:has(table.mapa), .rolagem { break-inside: auto !important; overflow: visible !important; }
+  table.escala thead, table.mapa thead { display: table-header-group; }
+  table.escala tr, table.mapa tr { break-inside: avoid; }
+  .status-escala, .roteiro, .visoes { display: none !important; }
+}

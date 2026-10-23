@@ -623,6 +623,7 @@ function clicarCelula(pid, isoData) {
 
 function trocarModo(m) {
   est.modo = ["orcado", "painel", "total", "aprov"].includes(m) ? m : "escala";
+  if ((est.modo === "painel" || est.modo === "aprov") && !ehDP()) est.modo = "escala";
   if (est.modo === "aprov") { APROV.dados = null; APROV.erro = null; carregarAprov(); }
   est.aberto = null;
   gravarLocal("escala_web_modo", est.modo);
@@ -830,6 +831,7 @@ const VISOES = [
 
 function render() {
   if (!est.dados || !plano()) return;
+  if ((est.modo === "painel" || est.modo === "aprov") && !ehDP()) est.modo = "escala";   // visões só do DP/Analista
   // guarda a rolagem lateral das tabelas
   const rol = {};
   $$("[data-rolagem]").forEach((el) => (rol[el.dataset.rolagem] = el.scrollLeft));
@@ -974,7 +976,7 @@ function htmlLateral() {
   return `<div class="marca"><img class="marca-selo" src="logo.png" alt="Passarinho Molicenter"><div><h1>Escala 5x2</h1><p>${esc(nomeLoja(est.loja))}</p></div></div>
     <nav class="nav">
       <div class="nav-rotulo">Visões</div>
-      <button type="button" data-acao="modo" data-v="painel" class="${m === "painel" ? "ativo" : ""}" title="Resumo para a reunião">${IC.painel}<span>Painel da mudança</span></button>
+      ${ehDP() ? `<button type="button" data-acao="modo" data-v="painel" class="${m === "painel" ? "ativo" : ""}" title="Resumo para a reunião">${IC.painel}<span>Painel da mudança</span></button>` : ""}
       <button type="button" data-acao="modo" data-v="orcado" class="${m === "orcado" ? "ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede">${IC.orcado}<span>QL Orçado x 5x2</span></button>
       <button type="button" data-acao="modo" data-v="total" class="${m === "total" ? "ativo" : ""}" title="Todos os departamentos juntos">${IC.total}<span>Total da loja</span><span class="qtd">${total}</span></button>
       ${ehDP() ? `<button type="button" data-acao="modo" data-v="aprov" class="${m === "aprov" ? "ativo" : ""}" title="Escalas enviadas, aprovadas e em rascunho de todas as lojas">${IC.aprov}<span>Aprovações</span>${APROV.dados ? `<span class="qtd${APROV.dados.filter((x) => x.status === "enviada").length ? " alerta" : ""}">${APROV.dados.filter((x) => x.status === "enviada").length}</span>` : ""}</button>` : ""}
