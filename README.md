@@ -8,6 +8,10 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - **Gravação:** cada loja + setor tem um plano em `escala_planos` (com as 30 versões anteriores em `escala_planos_historico`). Se duas pessoas mexerem ao mesmo tempo, o app avisa antes de gravar por cima.
 
 ## O que tem
+- **Hoje na loja**: quem trabalha (por departamento e turno, com horário e almoço), quem folga e quem está ausente no dia — ontem, hoje, amanhã ou qualquer data. Feito para o gerente olhar no celular.
+- **Trocar folga**: mudar o dia da folga de alguém ou trocar folgas entre duas pessoas, com conferência das regras e registro de quem fez.
+- **Histórico**: as 30 últimas versões salvas do setor (quem, quando, status, período) com botão Restaurar.
+- **Próximo período →**: gera as próximas semanas a partir do domingo seguinte, emendando com o fim da escala atual (não passa de 6 dias seguidos nem do máximo de domingos na virada).
 - **Aprovações** (só DP e Analista, no menu): status das escalas de todas as lojas, com botão Revisar para abrir e aprovar/devolver.
 - **Sugerir mínimos pela equipe** (aba Turnos e mínimos): mede quanta gente a equipe consegue deixar no posto em cada horário e propõe faixas possíveis.
 - **Escala por pessoa**: imprime/PDF com um cartão por funcionário (semanas × dias, horário de cada dia e horas da semana).
@@ -30,7 +34,7 @@ App estático (HTML/CSS/JS) servido pelo GitHub Pages a partir da pasta `docs/`,
 - Imprimir / PDF e baixar planilha (CSV que abre no Excel)
 
 ## Publicar
-1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) , `sql/03_escala_orcado.sql`, `sql/04_escala_dsr.sql` (DSR1/DSR2 do Banco QL.xlsx → folga fixa) e `sql/05_escala_status.sql` (envio/aprovação: loja não aprova nem grava por cima de escala aprovada) e `sql/06_escala_aprovacoes.sql` (painel de aprovações do DP). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
+1. Rodar no Supabase (SQL Editor), nesta ordem: `sql/01_escala_web.sql`, `sql/02_escala_logins.sql`, o arquivo de senhas (02b, guardado fora do GitHub) , `sql/03_escala_orcado.sql`, `sql/04_escala_dsr.sql` (DSR1/DSR2 do Banco QL.xlsx → folga fixa) e `sql/05_escala_status.sql` (envio/aprovação: loja não aprova nem grava por cima de escala aprovada) `sql/06_escala_aprovacoes.sql` (painel de aprovações do DP) e `sql/07_escala_historico.sql` (histórico de versões e restaurar). Só cria tabelas e funções com prefixo `escala_`; não mexe nas do QL.
 2. Subir a pasta `docs/` e o `sql/` neste repositório (pode apagar o `index.html`, `app.js` e `style.css` antigos da raiz).
 3. Settings → Pages → Branch `main`, pasta **/docs** → Save.
 
