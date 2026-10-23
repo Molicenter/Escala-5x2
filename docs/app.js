@@ -60,6 +60,13 @@ function regraDSR(x, bloqueados = []) {
   return { domingo: a === 0 ? "nunca" : "rodizio", folgaFixa: sem[0] ?? null, folgaFixa2: sem[1] ?? null };
 }
 const textoDSR = (pe) => (pe.dsr && pe.dsr.length ? "DSR " + pe.dsr.map((d) => M.DOW[d].slice(0, 3)).join("+") : "");
+// "DSR1 Dom · DSR2 Seg" (os dois do Excel; "—" quando o Excel não traz)
+function textoDSR12(pe) {
+  const ds = pe.dsr12 || (pe.dsr ? [pe.dsr[0] ?? null, pe.dsr[1] ?? null] : null);
+  if (!ds || (ds[0] == null && ds[1] == null)) return "";
+  const r = (d) => (d == null ? "—" : M.DOW[d].slice(0, 3));
+  return `DSR1 ${r(ds[0])} · DSR2 ${r(ds[1])}`;
+}
 // horário de funcionamento por loja (out/2026). dom: null = não abre no domingo
 const FUNC_V = 2;
 function funcionamentoPadrao(loja) {
@@ -67,6 +74,31 @@ function funcionamentoPadrao(loja) {
   if (l === 30) return { segsab: ["08:00", "18:00"], sab: ["08:00", "12:00"], dom: null };   // CD: seg a sex 8–18, sáb 8–12
   if (l === 8) return { segsab: ["08:00", "22:00"], sab: ["08:00", "22:00"], dom: ["08:00", "20:00"] };
   return { segsab: ["08:00", "21:00"], sab: ["08:00", "21:00"], dom: ["08:00", "20:00"] };   // Lojas 01 a 07
+}
+// feriados nacionais (out/2026 a dez/2027). Municipais/da loja: campo "Feriados da loja" na aba Turnos e mínimos
+const FERIADOS_NAC = {
+  "2026-11-02": "Finados", "2026-11-15": "Proclamação da República", "2026-11-20": "Consciência Negra", "2026-12-25": "Natal",
+  "2027-01-01": "Confraternização Universal", "2027-03-26": "Sexta-feira Santa", "2027-04-21": "Tiradentes", "2027-05-01": "Dia do Trabalho",
+  "2027-09-07": "Independência", "2027-10-12": "Nossa Senhora Aparecida", "2027-11-02": "Finados", "2027-11-15": "Proclamação da República",
+  "2027-11-20": "Consciência Negra", "2027-12-25": "Natal",
+};
+// véspera forte (movimento alto): marcada junto
+const VESPERAS = { "2026-12-24": "Véspera de Natal", "2026-12-31": "Véspera de Ano-Novo", "2027-12-24": "Véspera de Natal", "2027-12-31": "Véspera de Ano-Novo" };
+// "10/12 Aniversário da cidade; 08/12" → { "MM-DD": nome }
+function feriadosLoja(p) {
+  const out = {};
+  for (const parte of String(p.feriadosLoja || "").split(/[;\n]+/)) {
+    const m = parte.trim().match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\s*(.*)$/);
+    if (m) out[`${String(m[2]).padStart(2, "0")}-${String(m[1]).padStart(2, "0")}`] = m[4].trim() || "Feriado da loja";
+  }
+  return out;
+}
+function feriadoDe(p, isoData) {
+  if (FERIADOS_NAC[isoData]) return { nome: FERIADOS_NAC[isoData], tipo: "feriado" };
+  const fl = feriadosLoja(p)[isoData.slice(5)];
+  if (fl) return { nome: fl, tipo: "feriado" };
+  if (VESPERAS[isoData]) return { nome: VESPERAS[isoData], tipo: "vespera" };
+  return null;
 }
 const PESOS_CD = { 1: 3, 2: 3, 3: 3, 4: 3, 5: 3, 6: 1 };   // CD: sábado é meio período, folga cai lá primeiro
 const lojaAtual = () => est.dados?.loja ?? est.loja;
@@ -439,6 +471,7 @@ function sincronizar(p, doQL) {
     // DSR do Excel: vira a regra de domingo + folga fixa, até alguém mudar à mão nesta escala
     const r = regraDSR(x, p.diasSemFolga || []);
     pe.dsr = [diaDSR(x.d1), diaDSR(x.d2)].filter((d) => d != null);
+    pe.dsr12 = [diaDSR(x.d1), diaDSR(x.d2)];   // os dois DSR do Excel, na ordem (null = vazio)
     if (!pe.dsr.length) delete pe.dsr;
     if (r) pe.dsrRegra = r; else delete pe.dsrRegra;
     if (pe.dsrAuto === undefined && (pe.folgaFixa != null || (pe.domingo && pe.domingo !== "rodizio"))) pe.dsrAuto = false;   // já tinha ajuste manual
@@ -589,13 +622,27 @@ function clicarCelula(pid, isoData) {
 }
 
 function trocarModo(m) {
-  est.modo = ["orcado", "painel", "total"].includes(m) ? m : "escala";
+  est.modo = ["orcado", "painel", "total", "aprov"].includes(m) ? m : "escala";
+  if (est.modo === "aprov") { APROV.dados = null; APROV.erro = null; carregarAprov(); }
   est.aberto = null;
   gravarLocal("escala_web_modo", est.modo);
   render();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+function sugerirMinimosAgora() {
+  const p = plano(), pessoas = ativos(p);
+  if (!pessoas.length) return toast("Nenhuma pessoa na escala deste setor.", "aviso");
+  const sug = M.sugerirMinimos(p, pessoas);
+  const fx = sug.faixas.filter((f) => f.dias !== "dom").map((f) => `${f.de}–${f.ate}: ${f.min}`).join(" · ");
+  const fd = sug.faixas.filter((f) => f.dias === "dom").map((f) => `${f.de}–${f.ate}: ${f.min}`).join(" · ");
+  if (!confirm(`Mínimos que esta equipe (${pessoas.length} pessoas, ${p.cenario}h) consegue cumprir:\n\nSeg a sáb → ${fx || "—"}\nDomingo → ${fd || "—"}\n\nSubstituir o mínimo geral e as faixas atuais por estes e redistribuir as folgas?`)) return;
+  p.minimos = { geral: sug.geral, faixas: sug.faixas };
+  if (sug.domingo) p.domingo.minimo = sug.domingo;
+  M.redistribuir(p, pessoas);
+  alterou();
+  toast("Mínimos sugeridos aplicados e folgas redistribuídas. Ajuste as faixas se quiser mais gente em algum horário.", "ok");
+}
 function redistribuirAgora() {
   const p = plano();
   M.redistribuir(p, ativos(p));
@@ -712,6 +759,34 @@ async function salvar() {
 // ============================================================
 // EXPORTAR
 // ============================================================
+// um cartão por funcionário (impressão / PDF): semanas × dias com horário de cada dia
+function imprimirPorPessoa() {
+  const p = plano(), pessoas = ativos(p), an = M.analisar(p, pessoas);
+  const st = statusDe(p);
+  const cab = `${esc(nomeLoja(est.loja))} · ${esc(infoSetor(est.setor).rotulo)} · ${p.cenario}h${st.s === "aprovada" ? " · aprovada" : " · ainda não aprovada"}`;
+  const cartoes = pessoas.map((pe) => {
+    const t = M.turnoDe(p, pe);
+    const alm = t && t.almocoMin ? `${M.fmtHM(M.almocoDe(t, pe))}–${M.fmtHM(M.almocoDe(t, pe) + t.almocoMin)}` : "—";
+    const linhas = [...Array(p.semanas).keys()].map((w) => {
+      const ds = an.dias.slice(w * 7, w * 7 + 7);
+      return `<tr><th>${M.dataCurta(ds[0].d)}</th>${ds.map((d) => {
+        const v = M.valor(p, pe.id, d);
+        const h = M.trabalha(v) ? M.horarioPessoa(p, pe, d.dow, v) : v === "F" ? "Folga" : "Ausente";
+        return `<td class="pp-${v}"><b>${v === "D" ? "T" : v}</b><small>${esc(h)}</small></td>`;
+      }).join("")}<td class="pp-h">${M.fmtDur(an.horas[pe.id][w].min)}</td></tr>`;
+    }).join("");
+    return `<article class="pp-cartao"><header><b>${esc(pe.nome)}</b><span>${esc(pe.funcao ? titulo(pe.funcao) : "")}${t ? ` · ${esc(t.nome)} ${t.entrada}–${M.fmtHM(M.saidaTurno(t))} · almoço ${alm}` : ""}</span></header>
+      <table><thead><tr><th>Semana</th>${M.DOW.map((d) => `<th>${d}</th>`).join("")}<th>Horas</th></tr></thead><tbody>${linhas}</tbody></table></article>`;
+  }).join("");
+  let el = $("#impressao-pessoas");
+  if (!el) { el = document.createElement("section"); el.id = "impressao-pessoas"; document.body.appendChild(el); }
+  el.innerHTML = `<h2 class="pp-titulo">Escala por funcionário · ${cab}</h2><div class="pp-grade">${cartoes}</div>`;
+  document.documentElement.classList.add("imprimindo-pessoas");
+  const fim = () => { document.documentElement.classList.remove("imprimindo-pessoas"); window.removeEventListener("afterprint", fim); };
+  window.addEventListener("afterprint", fim);
+  setTimeout(() => window.print(), 50);
+}
+
 function exportarCSV() {
   const p = plano();
   const an = M.analisar(p, ativos(p));
@@ -763,7 +838,7 @@ function render() {
   if (est.modo !== "escala") {
     $("#lateral").innerHTML = htmlLateral();
     $("#topo").innerHTML = htmlTopo(p);
-    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : est.modo === "total" ? htmlTotal() : htmlOrcado());
+    $("#conteudo").innerHTML = htmlAbas() + (est.modo === "painel" ? htmlPainel() : est.modo === "total" ? htmlTotal() : est.modo === "aprov" ? htmlAprov() : htmlOrcado());
     htmlBarra();
     return;
   }
@@ -826,11 +901,48 @@ function htmlTopo(p) {
   </div>`;
 }
 
+// ============================================================
+// APROVAÇÕES (DP / Analista): status das escalas de todas as lojas — sql/06
+// ============================================================
+const APROV = { dados: null, erro: null, carregando: false };
+async function carregarAprov() {
+  if (APROV.carregando || !ehDP()) return;
+  APROV.carregando = true;
+  try { APROV.dados = await rpc("escala_web_aprovacoes", { p_token: sessao.token }); APROV.erro = null; }
+  catch (e) { APROV.erro = /Could not find|escala_web_aprovacoes/.test(String(e.message)) ? "Falta rodar o sql/06_escala_aprovacoes.sql no Supabase." : e.message; }
+  finally { APROV.carregando = false; render(); }
+}
+function htmlAprov() {
+  if (APROV.erro) return `<section class="cartao"><p class="erro">${esc(APROV.erro)}</p><button class="btn btn-borda" data-acao="aprov-recarregar">Tentar de novo</button></section>`;
+  if (!APROV.dados) return `<section class="cartao"><p class="texto-fraco">Carregando as escalas de todas as lojas…</p></section>`;
+  const grupos = [["enviada", "Aguardando aprovação"], ["rascunho", "Em montagem (rascunho)"], ["aprovada", "Aprovadas"]];
+  const lojas = [...new Set(APROV.dados.map((x) => x.loja))].sort((a, b) => a - b);
+  const resumo = lojas.map((l) => {
+    const xs = APROV.dados.filter((x) => x.loja === l);
+    const n = (st) => xs.filter((x) => x.status === st).length;
+    return `<tr><td class="loja">${esc(nomeLoja(l))}</td><td>${xs.length}</td><td class="${n("enviada") ? "env" : ""}">${n("enviada")}</td><td>${n("rascunho")}</td><td class="ok">${n("aprovada")}</td></tr>`;
+  }).join("");
+  const blocos = grupos.map(([st, rot]) => {
+    const xs = APROV.dados.filter((x) => x.status === st);
+    if (!xs.length) return "";
+    return `<section class="cartao"><div class="cartao-cab"><div><h2>${rot} <span class="qtd-titulo">${xs.length}</span></h2></div></div>
+      <div class="rolagem-conf"><table class="conf aprov-tab"><thead><tr><th>Loja</th><th>Setor</th><th>Jornada</th><th>Status</th><th>Última gravação</th><th></th></tr></thead><tbody>
+      ${xs.map((x) => `<tr><td><b>${esc(nomeLoja(x.loja))}</b></td><td>${esc(infoSetor(x.setor).rotulo)}</td><td>${esc(x.cenario || "")}h</td>
+        <td><span class="st-selo st-${x.status}">${ROT_STATUS[x.status] || x.status}</span>${x.por ? ` <small class="texto-fraco">${esc(x.por)} ${esc(fmtQuando(x.em))}</small>` : ""}${x.obs ? `<div class="st-obs">${esc(x.obs)}</div>` : ""}</td>
+        <td class="texto-fraco">${esc(x.usuario || "")} ${esc(fmtQuando(x.atualizado_em))}</td>
+        <td><button class="btn btn-peq ${st === "enviada" ? "btn-primario" : "btn-borda"}" data-acao="aprov-abrir" data-loja="${x.loja}" data-setor="${esc(x.setor)}">${st === "enviada" ? "Revisar" : "Abrir"}</button></td></tr>`).join("")}
+      </tbody></table></div></section>`;
+  }).join("");
+  return `<section class="cartao"><div class="cartao-cab"><div><h2>Escalas por loja</h2><p class="sub">Só aparecem os setores que já têm escala salva. Clique em Revisar para abrir a escala e aprovar ou devolver.</p></div><button class="btn btn-peq btn-borda nao-imprime" data-acao="aprov-recarregar">Atualizar</button></div>
+    <div class="rolagem-conf"><table class="orc-reuniao aprov-resumo"><thead><tr><th class="loja">Loja</th><th>Setores salvos</th><th>Aguardando</th><th>Rascunho</th><th>Aprovadas</th></tr></thead><tbody>${resumo || `<tr><td colspan="5" class="texto-fraco">Nenhuma escala salva ainda.</td></tr>`}</tbody></table></div></section>${blocos}`;
+}
+
 // título da visão atual (no topo, ao lado da loja)
 function tituloVisao() {
   if (est.modo === "painel") return "Painel da mudança";
   if (est.modo === "orcado") return "QL Orçado x 5x2";
   if (est.modo === "total") return "Total da loja";
+  if (est.modo === "aprov") return "Aprovações · todas as lojas";
   return infoSetor(est.setor).rotulo;
 }
 
@@ -849,6 +961,7 @@ function htmlLateral() {
     orcado: ic('<rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-5h14v5"/>'),
     total: ic('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'),
     dept: ic('<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>'),
+    aprov: ic('<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>'),
   };
   const total = est.estrutura.reduce((s2, x) => s2 + x.n, 0);
   const selo = (dept) => {
@@ -864,6 +977,7 @@ function htmlLateral() {
       <button type="button" data-acao="modo" data-v="painel" class="${m === "painel" ? "ativo" : ""}" title="Resumo para a reunião">${IC.painel}<span>Painel da mudança</span></button>
       <button type="button" data-acao="modo" data-v="orcado" class="${m === "orcado" ? "ativo" : ""}" title="Organograma do QL Orçado e quantas pessoas cada jornada pede">${IC.orcado}<span>QL Orçado x 5x2</span></button>
       <button type="button" data-acao="modo" data-v="total" class="${m === "total" ? "ativo" : ""}" title="Todos os departamentos juntos">${IC.total}<span>Total da loja</span><span class="qtd">${total}</span></button>
+      ${ehDP() ? `<button type="button" data-acao="modo" data-v="aprov" class="${m === "aprov" ? "ativo" : ""}" title="Escalas enviadas, aprovadas e em rascunho de todas as lojas">${IC.aprov}<span>Aprovações</span>${APROV.dados ? `<span class="qtd${APROV.dados.filter((x) => x.status === "enviada").length ? " alerta" : ""}">${APROV.dados.filter((x) => x.status === "enviada").length}</span>` : ""}</button>` : ""}
       <div class="nav-rotulo">Departamentos</div>
       ${est.estrutura.map((dp) => `<button type="button" data-acao="dept" data-dept="${esc(dp.dept)}" class="${m === "escala" && dp.dept === cur?.dept ? "ativo" : ""}">${IC.dept}<span>${esc(titulo(dp.dept))}</span>${selo(dp.dept)}<span class="qtd">${dp.n}</span></button>`).join("")}
     </nav>
@@ -1023,6 +1137,8 @@ function htmlKpis(p, pessoas, an) {
 
 function itensAtencao(p, an) {
   const itens = [];
+  const fers = an.dias.map((d) => [d, feriadoDe(p, d.iso)]).filter(([, f]) => f);
+  if (fers.length) itens.push(`<div class="alerta"><span class="selo">Feriado</span><span>${fers.map(([d, f]) => `<b>${M.dataCurta(d.d)}</b> ${esc(f.nome)}`).join(" · ")} — confira o horário da loja e o reforço nesses dias.</span></div>`);
   const acima8 = +p.cenario !== 44 ? p.turnos.filter((t) => t.jornadaMin > 480) : [];
   if (acima8.length) itens.push(`<div class="alerta aviso"><span class="selo">CLT</span><span>Jornada acima de 8h por dia no ${p.cenario}h (${[...new Set(acima8.map((t) => M.fmtDur(t.jornadaMin)))].join(", ")}): precisa de acordo de compensação de horas — confirmar com o DP.</span></div>`);
   for (const pr of an.problemas) {
@@ -1084,7 +1200,7 @@ function htmlEscala(p, pessoas, an) {
     cabSem += `<th colspan="7" class="ini-sem">Semana ${w + 1} · ${M.dataCurta(a)}–${M.dataCurta(b)}</th>`;
   }
   cabSem += `<th class="col-h" colspan="${semanasVis.length}">Horas</th></tr>`;
-  const cabDia = `<tr class="cab-dia">${dias.map((d) => `<th class="${d.dow === 0 ? "dom ini-sem" : ""}${d.iso === hojeISO ? " hoje" : ""}">${d.d.getUTCDate()}<small>${M.DOW[d.dow].slice(0, 3)}</small></th>`).join("")}${semanasVis.map((w) => `<th class="col-h">S${w + 1}</th>`).join("")}</tr>`;
+  const cabDia = `<tr class="cab-dia">${dias.map((d) => { const fe = feriadoDe(p, d.iso); return `<th class="${d.dow === 0 ? "dom ini-sem" : ""}${d.iso === hojeISO ? " hoje" : ""}${fe ? ` fer-${fe.tipo}` : ""}"${fe ? ` title="${esc(fe.nome)}"` : ""}>${d.d.getUTCDate()}<small>${fe ? (fe.tipo === "feriado" ? "Fer" : "Vés") : M.DOW[d.dow].slice(0, 3)}</small></th>`; }).join("")}${semanasVis.map((w) => `<th class="col-h">S${w + 1}</th>`).join("")}</tr>`;
 
   const avisosP = new Set(an.avisos.map((a) => a.pid));
   const linhaPessoa = (pe) => {
@@ -1097,10 +1213,12 @@ function htmlEscala(p, pessoas, an) {
       return `<td class="${d.dow === 0 ? "ini-sem" : ""}"><button type="button" class="cel ${v}${tr[d.iso] ? " trava" : ""}" data-cel="${esc(pe.id)}|${d.iso}" title="${esc(pe.nome + " · " + M.DOW_LONGO[d.dow] + " " + M.dataCurta(d.d) + " · " + tit)}">${v}</button></td>`;
     }).join("");
     const hs = semanasVis.map((w) => { const h = an.horas[pe.id][w]; return `<td class="col-h${h.acima ? " acima" : h.poucaFolga || h.muitaFolga ? " folga" : ""}">${M.fmtDur(h.min)}</td>`; }).join("");
-    const sub = [alm !== "—" ? `alm ${alm}` : "", pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
+    const dsrTxt = textoDSR12(pe);
+    // linha 1: cargo + DSR1/DSR2 (o almoço já aparece no horário da linha 2)
+    const sub = [pe.funcao ? titulo(pe.funcao) : "", pe.ferias ? "férias no QL" : ""].filter(Boolean).join(" · ");
     const hc = horarioNoCenario(p, pe);
-    const sub2 = [hc.txt, textoDSR(pe)].filter(Boolean).join(" · ");
-    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small>${esc(sub)}</small>${sub2 ? `<small class="senior" title="${esc([hc.tit, textoDSR(pe)].filter(Boolean).join(" · "))}">${esc(sub2)}</small>` : ""}</td>${cels}${hs}</tr>`;
+    const sub2 = hc.txt;
+    return `<tr class="${avisosP.has(pe.id) ? "linha-aviso " : ""}${pe.origem === "extra" ? "coringa" : ""}"><td class="col-nome"><b title="${esc(pe.nome)}">${esc(pe.nome)}</b><small title="${esc([sub, dsrTxt, alm !== "—" ? `almoço ${alm}` : ""].filter(Boolean).join(" · "))}">${esc(sub)}${dsrTxt ? `${sub ? " · " : ""}<span class="dsr-tag" title="Dias de folga (DSR) do Banco QL.xlsx">${esc(dsrTxt)}</span>` : ""}</small>${sub2 ? `<small class="senior" title="${esc(hc.tit)}">${esc(sub2)}</small>` : ""}</td>${cels}${hs}</tr>`;
   };
 
   // agrupa por turno; a linha do turno mostra quantos dele trabalham em cada dia
@@ -1126,6 +1244,7 @@ function htmlEscala(p, pessoas, an) {
         <button class="btn btn-primario" data-acao="redistribuir">Redistribuir folgas</button>
         <button class="btn btn-borda" data-acao="escalonar" title="Espalha os almoços de quem é do mesmo turno para não abrir buraco">Escalonar almoços</button>
         ${totTravas ? `<button class="btn btn-borda" data-acao="destravar" title="Remove os ajustes feitos à mão">Desfazer ajustes (${totTravas})</button>` : ""}
+        <button class="btn btn-borda" data-acao="por-pessoa" title="Imprime/salva em PDF um cartão por funcionário, para o mural ou para mandar no WhatsApp">Escala por pessoa</button>
         <button class="btn btn-borda" data-acao="csv">Planilha</button>
       </div>
     </div>
@@ -1151,7 +1270,8 @@ function htmlMapa(p, an) {
       tds += `<td class="${cls}${t % 60 === 0 ? " hora" : ""}" title="${M.DOW[x.dow]} ${M.fmtHM(t)}: ${c} no posto · mínimo ${m}">${cls === "vazio" ? "" : c}</td>`;
       minRow += `<td class="minimo${t % 60 === 0 ? " hora" : ""}">${m || ""}</td>`;
     }
-    return linha(`${M.DOW[x.dow]} ${x.d.getUTCDate()}`, tds + `<td class="res${x.abaixo ? " ruim" : ""}">${x.abaixo ? `${x.abaixo}×15'` : "—"}</td>`)
+    const fe = feriadoDe(p, x.iso);
+    return linha(`${M.DOW[x.dow]} ${x.d.getUTCDate()}${fe ? ` <span class="fer-tag fer-${fe.tipo}" title="${esc(fe.nome)}">${fe.tipo === "feriado" ? "feriado" : "véspera"}</span>` : ""}`, tds + `<td class="res${x.abaixo ? " ruim" : ""}">${x.abaixo ? `${x.abaixo}×15'` : "—"}</td>`)
       + (est.mostrarMinimo ? linha("mín.", minRow + "<td></td>", "linha-min") : "");
   }).join("");
   const botoes = Array.from({ length: p.semanas }, (_, i) => {
@@ -1195,6 +1315,7 @@ function htmlTurnos(p) {
       <label class="texto-fraco"><input type="checkbox" data-acao-change="dom-fechado"${fu.dom ? "" : " checked"}> fechado no domingo</label>
       <span class="texto-fraco">· no domingo cada pessoa faz a jornada normal dela; turno que passa do horário é puxado para mais cedo</span></div>
     <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="horario-padrao" title="Volta para o horário oficial desta loja">Usar horário padrão da loja</button></p>
+    <div class="linha-config"><b>Feriados da loja:</b> <input class="ent fer-in" value="${esc(p.feriadosLoja || "")}" data-bind="feriadosLoja" placeholder="ex.: 10/12 Aniversário de Londrina; 08/12"> <span class="texto-fraco">· os nacionais já vêm marcados; ficam em amarelo na escala e no mapa (véspera de Natal e Ano-Novo em rosa)</span></div>
     <div class="linha-config"><b>Movimento do dia</b> <span class="texto-fraco">(1 = fraco · 5 = forte — a folga vai para os dias mais fracos)</span></div>
     <div class="pesos">${[1, 2, 3, 4, 5, 6].map((dw) => `<label>${M.DOW[dw]} <select data-bind="pesos.${dw}" data-tipo="num">${opcoes([[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"]], p.pesos[dw])}</select></label>`).join("")}</div>
     <div class="linha-config"><b>Dia sem folga:</b> ${[1, 2, 3, 4, 5, 6].map((dw) => `<label class="texto-fraco"><input type="checkbox" data-acao-change="sem-folga" data-dow="${dw}"${(p.diasSemFolga || []).includes(dw) ? " checked" : ""}> ${M.DOW[dw]}</label>`).join(" ")} <span class="texto-fraco">· o motor não coloca folga nesses dias (DSR nesses dias passa para o outro dia de semana do DSR; se não tiver outro, fica)</span></div>
@@ -1213,7 +1334,8 @@ function htmlMinimos(p) {
     <div class="cartao-cab"><div><h2>Mínimo de pessoas no posto</h2><p class="sub">Vale o mínimo geral no horário da loja. Uma faixa vale no lugar da geral naquele horário (ex.: abre com 2, reforça às 9h e no almoço).</p></div></div>
     <div class="linha-config"><b>Mínimo geral (seg a sáb):</b> <input type="number" min="0" max="60" class="ent num" value="${p.minimos.geral}" data-bind="minimos.geral" data-tipo="num"> pessoas</div>
     <div class="rolagem-conf" style="margin-top:10px"><table class="conf"><thead><tr><th>Dias</th><th>De</th><th>Até</th><th>Mínimo</th><th></th></tr></thead><tbody>${linhas || `<tr><td colspan="5" class="texto-fraco">Nenhuma faixa. Só o mínimo geral está valendo.</td></tr>`}</tbody></table></div>
-    <p><button class="btn btn-peq btn-borda nao-imprime" data-acao="add-faixa">+ Faixa de mínimo</button></p>
+    <p class="nao-imprime"><button class="btn btn-peq btn-borda" data-acao="add-faixa">+ Faixa de mínimo</button>
+      <button class="btn btn-peq btn-primario" data-acao="sugerir-min" title="Mede quantas pessoas esta equipe consegue deixar no posto em cada horário e propõe faixas possíveis">Sugerir mínimos pela equipe</button></p>
     <div class="linha-config"><b>Domingo, mínimo no posto:</b> <input type="number" min="0" max="60" class="ent num" value="${p.domingo.minimo}" data-bind="domingo.minimo" data-tipo="num"> pessoas</div>
     <div class="linha-config"><b>Domingos seguidos, no máximo:</b> <input type="number" min="1" max="8" class="ent num" value="${p.domingosSeguidosMax}" data-bind="domingosSeguidosMax" data-tipo="num"> <span class="texto-fraco">(comércio: folga em pelo menos 1 domingo a cada 3 semanas)</span></div>
   </section>`;
@@ -1282,7 +1404,15 @@ document.addEventListener("click", (ev) => {
   if (!el || el.tagName === "SELECT" || el.tagName === "INPUT") return;
   const a = el.dataset.acao;
   if (a.startsWith("st-")) return acaoStatus(a);
-  const EDITA = ["redistribuir", "destravar", "add-turno", "rm-turno", "add-faixa", "rm-faixa", "add-extra", "rm-extra", "usar-dsr", "horario-padrao", "escalonar"];
+  if (a === "aprov-recarregar") { APROV.dados = null; APROV.erro = null; render(); return carregarAprov(); }
+  if (a === "aprov-abrir") {
+    const loja = +el.dataset.loja, setor = el.dataset.setor;
+    if (algumSujo() && loja !== est.loja && !confirm("Há alterações não salvas nesta loja. Trocar mesmo assim? (elas ficam guardadas neste navegador)")) return;
+    if (loja !== est.loja) salvarRascunhosTodos();
+    est.modo = "escala"; gravarLocal("escala_web_modo", "escala"); est.setor = setor; gravarLocal("escala_web_setor", setor);
+    return loja === est.loja ? abrirSetor(setor) : carregarLoja(loja);
+  }
+  const EDITA = ["sugerir-min", "redistribuir", "destravar", "add-turno", "rm-turno", "add-faixa", "rm-faixa", "add-extra", "rm-extra", "usar-dsr", "horario-padrao", "escalonar"];
   if (est.modo === "escala" && (EDITA.includes(a) || a === "cenario") && plano() && !podeEditar(plano())) return toast(motivoBloqueio(plano()), "aviso");
   if (a === "sair") return sair(false);
   if (a === "recarregar") {
@@ -1309,8 +1439,10 @@ document.addEventListener("click", (ev) => {
     return trocarCenario(+el.dataset.h);
   }
   if (a === "redistribuir") return redistribuirAgora();
+  if (a === "sugerir-min") return sugerirMinimosAgora();
   if (a === "destravar") return destravar();
   if (a === "csv") return exportarCSV();
+  if (a === "por-pessoa") return imprimirPorPessoa();
   if (a === "semana-mapa") { est.semanaMapa = +el.dataset.w; return render(); }
   if (a === "abrir-aviso") { const v = el.dataset.v || null; est.aberto = est.aberto === v ? null : v; return render(); }
   if (a === "mais-alertas") { est.mostrarTodosAlertas = !est.mostrarTodosAlertas; return render(); }

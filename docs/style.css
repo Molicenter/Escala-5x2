@@ -667,3 +667,47 @@ table.orc-reuniao { width: 100%; border-collapse: collapse; font-size: 1rem; }
 .org-func .orc-linha span { font-size: .58rem; padding: 0 4px; }
 .org-tot > b { padding: 2px 4px; }
 .org-func .orc-prec { font-size: .7rem; padding: 3px 2px 4px; }
+
+/* ---------- escala por funcionário (só na impressão) ---------- */
+#impressao-pessoas { display: none; }
+@media print {
+  .imprimindo-pessoas body > *:not(#impressao-pessoas) { display: none !important; }
+  .imprimindo-pessoas #impressao-pessoas { display: block; }
+}
+.pp-titulo { font-size: 13px; margin: 0 0 6px; color: #0B3D63; }
+.pp-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pp-cartao { border: 1px solid #9FB6CA; border-radius: 8px; padding: 6px 8px; break-inside: avoid; font-size: 9.5px; }
+.pp-cartao header { display: flex; flex-direction: column; margin-bottom: 4px; }
+.pp-cartao header b { font-size: 12px; color: #0B3D63; }
+.pp-cartao header span { color: #44586A; }
+.pp-cartao table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.pp-cartao th, .pp-cartao td { border: 1px solid #D5E0EA; padding: 2px; text-align: center; }
+.pp-cartao th { background: #E6F0F8; font-size: 9px; }
+.pp-cartao td b { display: block; font-size: 10px; }
+.pp-cartao td small { display: block; font-size: 7.5px; color: #44586A; white-space: nowrap; overflow: hidden; }
+.pp-cartao .pp-T, .pp-cartao .pp-D { background: #E3F4EC; }
+.pp-cartao .pp-F { background: #FDE2E2; }
+.pp-cartao .pp-X { background: #EEE; }
+.pp-cartao .pp-h { font-weight: 700; }
+@media print { .pp-cartao td, .pp-cartao th { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+
+/* ---------- aprovações ---------- */
+.nav .qtd.alerta { background: var(--magenta); }
+.qtd-titulo { font-size: .8rem; background: var(--azul-claro); color: var(--azul); border-radius: 999px; padding: 1px 9px; vertical-align: middle; }
+.aprov-tab td { vertical-align: middle; }
+.aprov-tab .st-selo { font-size: .68rem; }
+.aprov-resumo td.env { color: #8A5A00; font-weight: 800; background: #FFF3D1; }
+.aprov-resumo td.ok { color: var(--verde); font-weight: 800; }
+:root[data-theme="dark"] .aprov-resumo td.env { background: #3A2E10; color: #FFD27A; }
+
+.dsr-tag { font-weight: 700; color: var(--azul); white-space: nowrap; }
+
+/* ---------- feriados ---------- */
+.escala .cab-dia th.fer-feriado { background: #FFE9A8 !important; color: #6B4A00; }
+.escala .cab-dia th.fer-vespera { background: #FFD6EA !important; color: #8A0048; }
+.fer-tag { font-size: .62rem; font-weight: 800; border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+.fer-tag.fer-feriado { background: #FFE9A8; color: #6B4A00; }
+.fer-tag.fer-vespera { background: #FFD6EA; color: #8A0048; }
+.fer-in { min-width: 320px; }
+:root[data-theme="dark"] .escala .cab-dia th.fer-feriado, :root[data-theme="dark"] .fer-tag.fer-feriado { background: #4A3A10 !important; color: #FFD27A; }
+:root[data-theme="dark"] .escala .cab-dia th.fer-vespera, :root[data-theme="dark"] .fer-tag.fer-vespera { background: #4A1530 !important; color: #FF8CC6; }

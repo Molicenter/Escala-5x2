@@ -506,6 +506,69 @@
     }
   }
 
+  // ---------- sugerir mínimos pela equipe ----------
+  // Simula a escala sem mínimos (folgas só pelo movimento do dia), mede quantas pessoas a equipe
+  // consegue deixar no posto em cada horário e propõe faixas um pouco abaixo disso (20% piores dias,
+  // arredondado para baixo), em blocos de pelo menos 1h. Assim o mínimo é exigente mas possível.
+  function sugerirMinimos(p, pessoas) {
+    const q = JSON.parse(JSON.stringify(p));
+    q.minimos = { geral: 0, faixas: [] }; q.domingo = { ...q.domingo, minimo: +p.domingo?.minimo || Math.max(1, Math.round(pessoas.length * 0.25)) };   // domingo: mantém a quantidade para o rodízio acontecer q.travas = {}; q.grade = {};
+    q.semanas = Math.max(4, Math.min(q.semanas || 4, 8));
+    redistribuir(q, pessoas);
+    const an = analisar(q, pessoas);
+    const jan = an.jan;
+    const perc = (arr) => { const v = arr.slice().sort((x, y) => x - y); return v.length ? v[Math.floor((v.length - 1) * 0.2)] : 0; };
+    const curva = (dias) => {
+      const out = new Array(jan.n).fill(0);
+      for (let k = 0; k < jan.n; k++) out[k] = perc(dias.map((x) => x.cov[k]));
+      return out;
+    };
+    // blocos de mesmo valor, juntando os menores que 1h no vizinho de valor menor
+    function blocos(v, hor) {
+      if (!hor) return [];
+      let bs = [];
+      for (let k = 0; k < jan.n; k++) {
+        const t = jan.ini + k * PASSO;
+        if (t < hor[0] || t >= hor[1]) continue;
+        const m = Math.max(1, Math.floor(v[k] * 0.9));
+        const ult = bs[bs.length - 1];
+        if (ult && ult.min === m && ult.ate === t) ult.ate = t + PASSO; else bs.push({ de: t, ate: t + PASSO, min: m });
+      }
+      for (let volta = 0; volta < 50; volta++) {
+        const i = bs.findIndex((x) => x.ate - x.de < 60);
+        if (i < 0 || bs.length < 2) break;
+        const viz = i === 0 ? 1 : i === bs.length - 1 ? i - 1 : (bs[i - 1].min <= bs[i + 1].min ? i - 1 : i + 1);
+        const a = Math.min(i, viz), b = Math.max(i, viz);
+        bs.splice(a, 2, { de: bs[a].de, ate: bs[b].ate, min: Math.min(bs[a].min, bs[b].min) });
+        // junta vizinhos que ficaram iguais
+        bs = bs.reduce((acc, x) => { const u = acc[acc.length - 1]; if (u && u.min === x.min && u.ate === x.de) u.ate = x.ate; else acc.push({ ...x }); return acc; }, []);
+      }
+      return bs;
+    }
+    const semana = an.porDia.filter((x) => x.dow !== 0);
+    const sabDif = JSON.stringify(horarioDia(p, 6)) !== JSON.stringify(horarioDia(p, 1));
+    const faixas = [];
+    const add = (dias, bs) => bs.forEach((b) => faixas.push({ dias, de: fmtHM(b.de), ate: fmtHM(b.ate), min: b.min }));
+    let geral = 1;
+    if (sabDif) {
+      const bsx = blocos(curva(semana.filter((x) => x.dow !== 6)), horarioDia(p, 1));
+      const bss = blocos(curva(semana.filter((x) => x.dow === 6)), horarioDia(p, 6));
+      add("segsex", bsx); add("sab", bss);
+      geral = Math.min(...bsx.map((b) => b.min), ...(bss.length ? bss.map((b) => b.min) : [99]));
+    } else {
+      const bs = blocos(curva(semana), horarioDia(p, 1));
+      add("segsab", bs);
+      geral = bs.length ? Math.min(...bs.map((b) => b.min)) : 1;
+    }
+    let dom = 0;
+    if (horarioDia(p, 0)) {
+      const bd = blocos(curva(an.porDia.filter((x) => x.dow === 0)), horarioDia(p, 0));
+      add("dom", bd);
+      dom = bd.length ? Math.min(...bd.map((b) => b.min)) : 0;
+    }
+    return { geral: geral === 99 ? 1 : geral, domingo: dom, faixas };
+  }
+
   // ---------- escalonar almoços ----------
   // Para cada pessoa, testa o almoço do turno de 1h antes até 1h depois (de 15 em 15 min) e fica com
   // o que deixa menos gente abaixo do mínimo (falta maior pesa mais). Empate: o mais perto do horário do turno.
@@ -562,6 +625,6 @@
     DOW, DOW_LONGO, PASSO, GRUPOS_DIAS, CENARIOS, folgasSemana, jornadaCenario, ajustarCenario,
     hm, fmtHM, fmtDur, lerISO, iso, somaDias, dataCurta, dataBR, domingoDe,
     datasDoPlano, turnoDe, saidaTurno, intervalos, horarioDia, abertaNoDia, horarioPessoa, almocoDe, limitesAlmoco, escalonarAlmocos, minutosTrabalho, valor, trabalha,
-    janela, minimoNoSlot, analisar, redistribuir, lerEscalaSenior,
+    janela, minimoNoSlot, analisar, redistribuir, lerEscalaSenior, sugerirMinimos,
   };
 })();
